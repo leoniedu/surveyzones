@@ -1,0 +1,13 @@
+# R project files
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.Rprofile
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code local settings
+.claude/
