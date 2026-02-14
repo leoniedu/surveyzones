@@ -151,7 +151,7 @@ test_that("print and summary don't error", {
 })
 
 test_that("validate_solver rejects invalid solvers", {
-  expect_error(validate_solver("symphony"), "must be one of")
+  expect_error(validate_solver("nonexistent"), "must be one of")
   expect_error(validate_solver(42), "must be a single character")
   expect_error(validate_solver(c("glpk", "highs")), "must be a single character")
 })

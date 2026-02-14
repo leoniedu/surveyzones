@@ -53,7 +53,9 @@ surveyzones_build_zones <- function(
   enforce_partition = TRUE,
   candidates = NULL,
   max_variables = 500000L,
-  solver = "glpk"
+  solver = "glpk",
+  max_time = 300,
+  rel_tol = 0.01
 ) {
   validate_tracts(tracts)
   validate_solver(solver)
@@ -133,7 +135,9 @@ surveyzones_build_zones <- function(
       K_max = k_max_part,
       candidates = part_candidates,
       max_variables = max_variables,
-      solver = solver
+      solver = solver,
+      max_time = max_time,
+      rel_tol = rel_tol
     )
 
     # Tag with partition_id
@@ -199,7 +203,9 @@ surveyzones_build_zones_single <- function(
   K_max,
   candidates,
   max_variables = 500000L,
-  solver = "glpk"
+  solver = "glpk",
+  max_time = 300,
+  rel_tol = 0.01
 ) {
   n <- nrow(tracts)
   total_workload <- sum(tracts$expected_service_time)
@@ -237,7 +243,9 @@ surveyzones_build_zones_single <- function(
       max_workload_per_zone = max_workload_per_zone,
       candidates = candidates,
       max_variables = max_variables,
-      solver = solver
+      solver = solver,
+      max_time = max_time,
+      rel_tol = rel_tol
     )
 
     if (result$diagnostics$solver_status == "optimal") {
@@ -298,7 +306,9 @@ surveyzones_solve_fixed_K <- function(
   max_workload_per_zone,
   candidates,
   max_variables = 500000L,
-  solver = "glpk"
+  solver = "glpk",
+  max_time = 300,
+  rel_tol = 0.01
 ) {
   start_time <- proc.time()["elapsed"]
 
@@ -438,11 +448,31 @@ surveyzones_solve_fixed_K <- function(
     }
   }
 
-  # Solve
+  # Solve — solver-specific parameter dispatch (cf. orce package)
   solver_label <- toupper(solver)
-  cli::cli_alert_info("  K={K}: Solving MILP with {solver_label}...")
+  cli::cli_alert_info(
+    "  K={K}: Solving MILP with {solver_label} (max_time={max_time}s, rel_tol={rel_tol})..."
+  )
   solve_t0 <- proc.time()[["elapsed"]]
-  result <- ompr::solve_model(model, ompr.roi::with_ROI(solver = solver))
+  if (solver == "symphony") {
+    result <- ompr::solve_model(
+      model,
+      ompr.roi::with_ROI(
+        solver = solver,
+        max_time = as.numeric(max_time),
+        gap_limit = rel_tol * 100
+      )
+    )
+  } else {
+    result <- ompr::solve_model(
+      model,
+      ompr.roi::with_ROI(
+        solver = solver,
+        max_time = as.numeric(max_time),
+        rel_tol = rel_tol
+      )
+    )
+  }
   solve_elapsed <- proc.time()[["elapsed"]] - solve_t0
 
   solve_time <- as.numeric(proc.time()["elapsed"] - start_time)
@@ -450,6 +480,19 @@ surveyzones_solve_fixed_K <- function(
   # ROI returns "success" while other solvers return "optimal"
   if (status == "success") {
     status <- "optimal"
+  }
+  # Accept feasible solutions found within time limit
+  if (status == "error") {
+    has_solution <- tryCatch(
+      { ompr::objective_value(result); TRUE },
+      error = function(e) FALSE
+    )
+    if (has_solution) {
+      cli::cli_alert_warning(
+        "  K={K}: solver hit time/gap limit but found a feasible solution"
+      )
+      status <- "optimal"
+    }
   }
 
   cli::cli_alert_info(
@@ -572,7 +615,7 @@ surveyzones_solve_fixed_K <- function(
 #' @return `solver`, invisibly.
 #' @keywords internal
 validate_solver <- function(solver, call = rlang::caller_env()) {
-  supported <- c("glpk", "highs", "cbc")
+  supported <- c("glpk", "highs", "cbc", "symphony")
   if (!is.character(solver) || length(solver) != 1L) {
     cli::cli_abort(
       "{.arg solver} must be a single character string.",

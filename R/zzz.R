@@ -18,4 +18,12 @@ utils::globalVariables(c(
 .onLoad <- function(libname, pkgname) {
   # ROI requires plugins to be explicitly loaded for solver registration
   requireNamespace("ROI.plugin.glpk", quietly = TRUE)
+
+  # Register solver-specific control mappings for ROI (cf. orce package)
+  try(ROI::ROI_plugin_register_solver_control(
+    "cbc", "ratio", "rel_tol"
+  ), silent = TRUE)
+  try(ROI::ROI_plugin_register_solver_control(
+    "highs", "mip_rel_gap", "rel_tol"
+  ), silent = TRUE)
 }
