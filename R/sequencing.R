@@ -20,29 +20,25 @@ surveyzones_sequence <- function(plan, sparse_distances,
     cli::cli_abort("{.arg plan} must be a {.cls surveyzones_plan} object.")
   }
 
-  zones <- split(plan$assignments, plan$assignments$zone_id)
+  # Process each zone using purrr::map_df
+  plan$sequence <- plan$assignments |>
+    tidyr::nest(data = -zone_id) |>
+    dplyr::mutate(
+      ordered = purrr::map(
+        data,
+        \(z) surveyzones_sequence_zone(
+          tract_ids = z$tract_id,
+          sparse_distances = sparse_distances,
+          method = method
+        )
+      )
+    ) |>
+    dplyr::select(-data) |>
+    tidyr::unnest_longer(ordered, values_to = "tract_id") |>
+    dplyr::group_by(zone_id) |>
+    dplyr::mutate(visit_order = dplyr::row_number()) |>
+    dplyr::ungroup()
 
-  results <- vector("list", length(zones))
-
-  for (i in seq_along(zones)) {
-    z <- zones[[i]]
-    zone_id <- z$zone_id[1]
-    tract_ids <- z$tract_id
-
-    ordered <- surveyzones_sequence_zone(
-      tract_ids = tract_ids,
-      sparse_distances = sparse_distances,
-      method = method
-    )
-
-    results[[i]] <- tibble::tibble(
-      zone_id = zone_id,
-      tract_id = ordered,
-      visit_order = seq_along(ordered)
-    )
-  }
-
-  plan$sequence <- do.call(rbind, results)
   plan
 }
 
@@ -100,12 +96,9 @@ surveyzones_sequence_zone <- function(tract_ids, sparse_distances,
     dplyr::filter(origin_id %in% tract_ids, destination_id %in% tract_ids)
 
   if (nrow(dt) > 0) {
-    for (r in seq_len(nrow(dt))) {
-      oi <- as.character(dt$origin_id[r])
-      di <- as.character(dt$destination_id[r])
-      mat[oi, di] <- dt$travel_time[r]
-      mat[di, oi] <- dt$travel_time[r]  # symmetrise
-    }
+    # Vectorized matrix assignment using cbind indexing
+    mat[cbind(as.character(dt$origin_id), as.character(dt$destination_id))] <- dt$travel_time
+    mat[cbind(as.character(dt$destination_id), as.character(dt$origin_id))] <- dt$travel_time  # symmetrise
   }
 
   mat
