@@ -55,7 +55,8 @@ surveyzones_build_zones <- function(
   max_variables = 500000L,
   solver = "glpk",
   max_time = 300,
-  rel_tol = 0.01
+  rel_tol = 0.01,
+  verbose = FALSE
 ) {
   validate_tracts(tracts)
   validate_solver(solver)
@@ -137,7 +138,8 @@ surveyzones_build_zones <- function(
       max_variables = max_variables,
       solver = solver,
       max_time = max_time,
-      rel_tol = rel_tol
+      rel_tol = rel_tol,
+      verbose = verbose
     )
 
     # Tag with partition_id
@@ -205,7 +207,8 @@ surveyzones_build_zones_single <- function(
   max_variables = 500000L,
   solver = "glpk",
   max_time = 300,
-  rel_tol = 0.01
+  rel_tol = 0.01,
+  verbose = FALSE
 ) {
   n <- nrow(tracts)
   total_workload <- sum(tracts$expected_service_time)
@@ -232,6 +235,118 @@ surveyzones_build_zones_single <- function(
     "n = {n}, total workload = {round(total_workload, 1)}, K0 = {K0}, K_max = {K_max}, model = {model_type}"
   )
 
+  # ── Connected component decomposition ──────────────────────────────────────
+  # If the sparse distance graph has multiple disconnected components,
+
+  # solve each independently (much smaller MILPs).
+  tract_ids_chr <- as.character(tracts$tract_id)
+  g <- igraph::graph_from_data_frame(
+    data.frame(
+      from = sparse_distances$origin_id,
+      to = sparse_distances$destination_id,
+      stringsAsFactors = FALSE
+    ),
+    directed = FALSE,
+    vertices = data.frame(name = tract_ids_chr, stringsAsFactors = FALSE)
+  )
+  comp <- igraph::components(g)
+
+  if (comp$no > 1) {
+    comp_sizes <- sort(comp$csize, decreasing = TRUE)
+    cli::cli_alert_info(
+      "{comp$no} connected components (sizes: {paste(comp_sizes, collapse = ', ')})"
+    )
+
+    # Map each tract to its component
+    comp_membership <- stats::setNames(comp$membership, igraph::V(g)$name)
+
+    all_comp_assignments <- vector("list", comp$no)
+    all_comp_zones <- vector("list", comp$no)
+    total_obj <- 0
+    start_time <- proc.time()[["elapsed"]]
+
+    for (ci in seq_len(comp$no)) {
+      comp_ids <- names(comp_membership[comp_membership == ci])
+      comp_n <- length(comp_ids)
+
+      # Singletons: no MILP needed, assign directly
+      if (comp_n == 1) {
+        wl <- tracts$expected_service_time[tracts$tract_id == comp_ids]
+        all_comp_assignments[[ci]] <- tibble::tibble(
+          tract_id = comp_ids,
+          zone_id = comp_ids,
+          partition_id = NA_character_,
+          center_id = comp_ids,
+          travel_time_to_center = 0
+        )
+        all_comp_zones[[ci]] <- tibble::tibble(
+          zone_id = comp_ids,
+          partition_id = NA_character_,
+          center_tract_id = comp_ids,
+          total_workload = wl,
+          diameter = 0,
+          n_tracts = 1L
+        )
+        next
+      }
+
+      cli::cli_alert_info("Component {ci}/{comp$no}: {comp_n} tracts")
+
+      comp_tracts <- tracts[tracts$tract_id %in% comp_ids, ]
+      comp_dist <- sparse_distances[
+        origin_id %in% comp_ids & destination_id %in% comp_ids
+      ]
+      comp_full_dist <- full_sparse_distances[
+        origin_id %in% comp_ids & destination_id %in% comp_ids
+      ]
+      comp_candidates <- intersect(candidates, comp_ids)
+      comp_K_max <- min(K_max, comp_n)
+
+      # Solve this component (will find 1 component and use normal K loop)
+      comp_result <- surveyzones_build_zones_single(
+        sparse_distances = comp_dist,
+        full_sparse_distances = comp_full_dist,
+        tracts = comp_tracts,
+        D_max = D_max,
+        max_workload_per_zone = max_workload_per_zone,
+        target_zone_size = target_zone_size,
+        K_max = comp_K_max,
+        candidates = comp_candidates,
+        max_variables = max_variables,
+        solver = solver,
+        max_time = max_time,
+        rel_tol = rel_tol,
+        verbose = verbose
+      )
+
+      all_comp_assignments[[ci]] <- comp_result$assignments
+      all_comp_zones[[ci]] <- comp_result$zones
+      if (!is.na(comp_result$diagnostics$objective_value)) {
+        total_obj <- total_obj + comp_result$diagnostics$objective_value
+      }
+    }
+
+    combined_assignments <- dplyr::bind_rows(all_comp_assignments)
+    combined_zones <- dplyr::bind_rows(all_comp_zones)
+    elapsed <- proc.time()[["elapsed"]] - start_time
+
+    cli::cli_alert_success(
+      "All {comp$no} components solved: {nrow(combined_zones)} zones in {round(elapsed, 1)}s"
+    )
+
+    return(list(
+      assignments = combined_assignments,
+      zones = combined_zones,
+      diagnostics = list(
+        solver_status = "optimal",
+        objective_value = total_obj,
+        n_variables = NA_integer_,
+        solve_time = elapsed
+      )
+    ))
+  }
+  # ── End component decomposition ────────────────────────────────────────────
+
   for (K in seq(K0, K_max)) {
     cli::cli_alert("Trying K = {K}...")
 
@@ -245,7 +360,8 @@ surveyzones_build_zones_single <- function(
       max_variables = max_variables,
       solver = solver,
       max_time = max_time,
-      rel_tol = rel_tol
+      rel_tol = rel_tol,
+      verbose = verbose
     )
 
     if (result$diagnostics$solver_status == "optimal") {
@@ -308,7 +424,8 @@ surveyzones_solve_fixed_K <- function(
   max_variables = 500000L,
   solver = "glpk",
   max_time = 300,
-  rel_tol = 0.01
+  rel_tol = 0.01,
+  verbose = FALSE
 ) {
   start_time <- proc.time()["elapsed"]
 
@@ -460,7 +577,8 @@ surveyzones_solve_fixed_K <- function(
       ompr.roi::with_ROI(
         solver = solver,
         max_time = as.numeric(max_time),
-        gap_limit = rel_tol * 100
+        gap_limit = rel_tol * 100,
+        verbose = verbose
       )
     )
   } else {
@@ -469,7 +587,8 @@ surveyzones_solve_fixed_K <- function(
       ompr.roi::with_ROI(
         solver = solver,
         max_time = as.numeric(max_time),
-        rel_tol = rel_tol
+        rel_tol = rel_tol,
+        verbose = verbose
       )
     )
   }
@@ -481,22 +600,20 @@ surveyzones_solve_fixed_K <- function(
   if (status == "success") {
     status <- "optimal"
   }
-  # Accept feasible solutions found within time limit
+  # Accept feasible solutions found within time limit (if finite objective)
   if (status == "error") {
-    has_solution <- tryCatch(
-      { ompr::objective_value(result); TRUE },
-      error = function(e) FALSE
-    )
-    if (has_solution) {
+    obj <- tryCatch(ompr::objective_value(result), error = function(e) Inf)
+    if (is.finite(obj)) {
       cli::cli_alert_warning(
-        "  K={K}: solver hit time/gap limit but found a feasible solution"
+        "  K={K}: solver hit time/gap limit but found a feasible solution (obj={round(obj, 2)})"
       )
       status <- "optimal"
     }
   }
 
+  obj_val <- tryCatch(round(ompr::objective_value(result), 2), error = function(e) NA_real_)
   cli::cli_alert_info(
-    "  K={K}: solver returned {.val {status}} in {round(solve_elapsed, 2)}s (total prep+solve: {round(solve_time, 2)}s)"
+    "  K={K}: solver returned {.val {status}} in {round(solve_elapsed, 1)}s, objective={obj_val}"
   )
 
   if (status != "optimal") {
@@ -532,6 +649,31 @@ surveyzones_solve_fixed_K <- function(
   cli::cli_alert_info(
     "  K={K}: {nrow(active)} active assignments, objective = {round(ompr::objective_value(result), 2)}"
   )
+
+  # Validate all tracts are assigned
+  if (nrow(active) < n) {
+    cli::cli_alert_warning(
+      "  K={K}: only {nrow(active)}/{n} tracts assigned, treating as infeasible"
+    )
+    return(list(
+      assignments = tibble::tibble(
+        tract_id = character(0), zone_id = character(0),
+        partition_id = character(0), center_id = character(0),
+        travel_time_to_center = numeric(0)
+      ),
+      zones = tibble::tibble(
+        zone_id = character(0), partition_id = character(0),
+        center_tract_id = character(0), total_workload = numeric(0),
+        diameter = numeric(0), n_tracts = integer(0)
+      ),
+      diagnostics = list(
+        solver_status = "infeasible",
+        objective_value = NA_real_,
+        n_variables = as.integer(n_x),
+        solve_time = solve_time
+      )
+    ))
+  }
 
   assignments <- tibble::tibble(
     tract_id = tract_ids[pair_i[active$p]],

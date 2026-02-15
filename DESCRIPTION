@@ -19,6 +19,7 @@ Imports:
     data.table,
     dplyr,
     ggplot2,
+    igraph,
     ompr,
     ompr.roi,
     ROI.plugin.glpk,
