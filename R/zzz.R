@@ -1,14 +1,15 @@
 #' @keywords internal
 "_PACKAGE"
 
-# Suppress R CMD check NOTEs for dplyr/ompr/ggplot2 column references
+# Suppress R CMD check NOTEs for dplyr/tidyr/ompr/ggplot2 column references
 utils::globalVariables(c(
   "origin_id", "destination_id", "travel_time",
   "i", "j",
   "x", "y", "p",
   "center_id", "tract_id", "travel_time_to_center",
   "zone_id", "partition_id",
-  "xend", "yend"
+  "xend", "yend",
+  "data"  # tidyr::nest() creates this variable
 ))
 
 .onLoad <- function(libname, pkgname) {

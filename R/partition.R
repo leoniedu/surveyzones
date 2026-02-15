@@ -26,7 +26,12 @@ surveyzones_partition <- function(tracts, enforce_partition = TRUE) {
   has_partition <- "partition_id" %in% names(tracts)
 
   if (enforce_partition && has_partition) {
-    parts <- split(tracts, tracts$partition_id)
+    # Group by partition_id and convert to named list
+    parts <- tracts |>
+      dplyr::as_tibble() |>
+      tidyr::nest(data = -partition_id) |>
+      tibble::deframe()
+
     cli::cli_alert_info(
       "Partitioned into {length(parts)} group{?s} by {.field partition_id}."
     )

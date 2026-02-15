@@ -75,23 +75,19 @@ summary.surveyzones_plan <- function(object, ...) {
   }
 
   # Per-partition summary
-  partitions <- split(zones, zones$partition_id)
-  rows <- lapply(names(partitions), function(pid) {
-    z <- partitions[[pid]]
-    tibble::tibble(
-      partition_id = pid,
-      K = nrow(z),
-      n_tracts = sum(z$n_tracts),
-      workload_min = min(z$total_workload),
-      workload_max = max(z$total_workload),
-      workload_mean = mean(z$total_workload),
-      diameter_min = min(z$diameter, na.rm = TRUE),
-      diameter_max = max(z$diameter, na.rm = TRUE),
-      diameter_mean = mean(z$diameter, na.rm = TRUE)
-    )
-  })
-
-  summary_tbl <- do.call(rbind, rows)
+  summary_tbl <- zones |>
+    tidyr::nest(data = -partition_id) |>
+    dplyr::mutate(
+      K = purrr::map_int(data, nrow),
+      n_tracts = purrr::map_dbl(data, \(z) sum(z$n_tracts)),
+      workload_min = purrr::map_dbl(data, \(z) min(z$total_workload)),
+      workload_max = purrr::map_dbl(data, \(z) max(z$total_workload)),
+      workload_mean = purrr::map_dbl(data, \(z) mean(z$total_workload)),
+      diameter_min = purrr::map_dbl(data, \(z) min(z$diameter, na.rm = TRUE)),
+      diameter_max = purrr::map_dbl(data, \(z) max(z$diameter, na.rm = TRUE)),
+      diameter_mean = purrr::map_dbl(data, \(z) mean(z$diameter, na.rm = TRUE))
+    ) |>
+    dplyr::select(-data)
 
   cli::cli_h1("surveyzones plan summary")
   print(summary_tbl)

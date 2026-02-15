@@ -90,19 +90,13 @@ surveyzones_build_zones <- function(
     "{length(parts)} partition{?s}: {paste(names(parts), collapse = ', ')}"
   )
 
-  all_assignments <- vector("list", length(parts))
-  all_zones <- vector("list", length(parts))
-  all_diag <- vector("list", length(parts))
-  partition_names <- names(parts)
-
   build_t0 <- proc.time()[["elapsed"]]
 
-  for (i in seq_along(parts)) {
-    pid <- partition_names[i]
-    part_tracts <- parts[[i]]
-
+  # Process each partition using purrr::imap
+  results <- purrr::imap(parts, \(part_tracts, pid) {
+    part_idx <- match(pid, names(parts))
     cli::cli_h2(
-      "Partition {i}/{length(parts)}: {pid} ({nrow(part_tracts)} tracts)"
+      "Partition {part_idx}/{length(parts)}: {pid} ({nrow(part_tracts)} tracts)"
     )
 
     # Filter distances to this partition's tracts
@@ -144,29 +138,30 @@ surveyzones_build_zones <- function(
     result$assignments$partition_id <- pid
     result$zones$partition_id <- pid
 
-    all_assignments[[i]] <- result$assignments
-    all_zones[[i]] <- result$zones
-    all_diag[[i]] <- result$diagnostics
-
     cli::cli_alert_info(
       "Partition {pid}: status={result$diagnostics$solver_status}, zones={nrow(result$zones)}, time={round(result$diagnostics$solve_time, 2)}s"
     )
-  }
+
+    result
+  })
 
   build_elapsed <- proc.time()[["elapsed"]] - build_t0
 
-  assignments <- do.call(rbind, all_assignments)
-  zones <- do.call(rbind, all_zones)
+  # Extract and combine results using dplyr::bind_rows
+  assignments <- purrr::map_df(results, \(r) r$assignments)
+  zones <- purrr::map_df(results, \(r) r$zones)
 
   cli::cli_rule()
   cli::cli_alert_success(
     "All partitions done: {nrow(zones)} zones for {nrow(assignments)} tracts in {round(build_elapsed, 2)}s"
   )
+
+  # Extract diagnostics from each partition's results
   diagnostics <- list(
-    solver_status = vapply(all_diag, \(d) d$solver_status, character(1)),
-    objective_value = vapply(all_diag, \(d) d$objective_value, numeric(1)),
-    n_variables = vapply(all_diag, \(d) d$n_variables, integer(1)),
-    solve_time = vapply(all_diag, \(d) d$solve_time, numeric(1))
+    solver_status = purrr::map_chr(results, \(r) r$diagnostics$solver_status),
+    objective_value = purrr::map_dbl(results, \(r) r$diagnostics$objective_value),
+    n_variables = purrr::map_int(results, \(r) r$diagnostics$n_variables),
+    solve_time = purrr::map_dbl(results, \(r) r$diagnostics$solve_time)
   )
 
   parameters <- list(

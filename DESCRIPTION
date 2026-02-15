@@ -21,11 +21,12 @@ Imports:
     igraph,
     ompr,
     ompr.roi,
+    purrr,
     readr,
-    ROI.plugin.glpk,
     rlang,
     sf,
     tibble,
+    tidyr,
     TSP
 Suggests:
     arrow,
