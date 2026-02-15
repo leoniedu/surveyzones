@@ -68,13 +68,9 @@ surveyzones_build_zones <- function(
     ))
   }
 
-  # Keep unfiltered distances for true diameter computation
-  full_sparse_distances <- sparse_distances
-
-  # Filter distances to D_max
+  # Count distances before and after D_max filtering
   n_before <- nrow(sparse_distances)
-  sparse_distances <- sparse_distances |> dplyr::filter(travel_time <= D_max)
-  n_after <- nrow(sparse_distances)
+  n_after <- nrow(sparse_distances |> dplyr::filter(travel_time <= D_max))
 
   cli::cli_alert_info(
     "Input: {nrow(tracts)} tracts, {n_after} distance pairs (filtered from {n_before} by D_max = {D_max})"
@@ -99,11 +95,11 @@ surveyzones_build_zones <- function(
       "Partition {part_idx}/{length(parts)}: {pid} ({nrow(part_tracts)} tracts)"
     )
 
-    # Filter distances to this partition's tracts
+    # Unfiltered distances for this partition
     part_ids <- as.character(part_tracts$tract_id)
-    part_dist <- sparse_distances |>
+    part_full_dist <- sparse_distances |>
       dplyr::filter(origin_id %in% part_ids, destination_id %in% part_ids)
-    cli::cli_alert_info("Distance pairs for partition: {nrow(part_dist)}")
+    cli::cli_alert_info("Distance pairs for partition (unfiltered): {nrow(part_full_dist)}")
 
     part_candidates <- if (!is.null(candidates)) {
       intersect(candidates, part_ids)
@@ -114,12 +110,7 @@ surveyzones_build_zones <- function(
 
     k_max_part <- K_max %||% nrow(part_tracts)
 
-    # Full (unfiltered) distances for this partition, used for diameter
-    part_full_dist <- full_sparse_distances |>
-      dplyr::filter(origin_id %in% part_ids, destination_id %in% part_ids)
-
     result <- surveyzones_build_zones_single(
-      sparse_distances = part_dist,
       full_sparse_distances = part_full_dist,
       tracts = part_tracts,
       D_max = D_max,
@@ -184,12 +175,12 @@ surveyzones_build_zones <- function(
 #' solution is found.
 #'
 #' @inheritParams surveyzones_build_zones
+#' @param full_sparse_distances Tibble of all distance pairs (unfiltered).
 #' @param candidates Character vector of candidate center tract_ids.
 #'
 #' @return A list with `assignments`, `zones`, and `diagnostics`.
 #' @keywords internal
 surveyzones_build_zones_single <- function(
-  sparse_distances,
   full_sparse_distances,
   tracts,
   D_max,
@@ -229,10 +220,17 @@ surveyzones_build_zones_single <- function(
   )
 
   # ── Connected component decomposition ──────────────────────────────────────
-  # If the sparse distance graph has multiple disconnected components,
-
-  # solve each independently (much smaller MILPs).
+  # Filter distances to this partition and D_max for graph connectivity
   tract_ids_chr <- as.character(tracts$tract_id)
+  sparse_distances <- full_sparse_distances |>
+    dplyr::filter(
+      travel_time <= D_max,
+      origin_id %in% tract_ids_chr,
+      destination_id %in% tract_ids_chr
+    )
+
+  # If the sparse distance graph has multiple disconnected components,
+  # solve each independently (much smaller MILPs).
   g <- igraph::graph_from_data_frame(
     data.frame(
       from = sparse_distances$origin_id,
@@ -286,8 +284,6 @@ surveyzones_build_zones_single <- function(
       cli::cli_alert_info("Component {ci}/{comp$no}: {comp_n} tracts")
 
       comp_tracts <- tracts |> dplyr::filter(tract_id %in% comp_ids)
-      comp_dist <- sparse_distances |>
-        dplyr::filter(origin_id %in% comp_ids, destination_id %in% comp_ids)
       comp_full_dist <- full_sparse_distances |>
         dplyr::filter(origin_id %in% comp_ids, destination_id %in% comp_ids)
       comp_candidates <- intersect(candidates, comp_ids)
@@ -295,7 +291,6 @@ surveyzones_build_zones_single <- function(
 
       # Solve this component (will find 1 component and use normal K loop)
       comp_result <- surveyzones_build_zones_single(
-        sparse_distances = comp_dist,
         full_sparse_distances = comp_full_dist,
         tracts = comp_tracts,
         D_max = D_max,
@@ -342,10 +337,10 @@ surveyzones_build_zones_single <- function(
     cli::cli_alert("Trying K = {K}...")
 
     result <- surveyzones_solve_fixed_K(
-      sparse_distances = sparse_distances,
       full_sparse_distances = full_sparse_distances,
       tracts = tracts,
       K = K,
+      D_max = D_max,
       max_workload_per_zone = max_workload_per_zone,
       candidates = candidates,
       max_variables = max_variables,
@@ -393,6 +388,84 @@ surveyzones_build_zones_single <- function(
 }
 
 
+#' Add Assignment Constraints to MILP
+#'
+#' Each tract must be assigned to exactly one center.
+#'
+#' @param model An ompr MILP model.
+#' @param pair_i Integer vector mapping sparse pair index to tract index.
+#' @param n Integer. Number of tracts.
+#'
+#' @return Updated MILP model with assignment constraints.
+#' @keywords internal
+.add_assignment_constraints <- function(model, pair_i, n) {
+  for (i_val in seq_len(n)) {
+    ps <- which(pair_i == i_val)
+    model <- model |>
+      ompr::add_constraint(ompr::sum_over(x[p], p = ps) == 1)
+  }
+  model
+}
+
+
+#' Add Capacity Constraints to MILP
+#'
+#' Each center cannot exceed the maximum workload.
+#'
+#' @param model An ompr MILP model.
+#' @param pair_i Integer vector mapping sparse pair index to tract index.
+#' @param pair_j Integer vector mapping sparse pair index to center index.
+#' @param w Numeric vector of tract workloads.
+#' @param m Integer. Number of candidate centers.
+#' @param max_workload_per_zone Numeric. Maximum workload per zone.
+#'
+#' @return Updated MILP model with capacity constraints.
+#' @keywords internal
+.add_capacity_constraints <- function(model, pair_i, pair_j, w, m, max_workload_per_zone) {
+  for (j_val in seq_len(m)) {
+    ps <- which(pair_j == j_val)
+    if (length(ps) > 0) {
+      model <- model |>
+        ompr::add_constraint(
+          ompr::sum_over(w[pair_i[p]] * x[p], p = ps) <= max_workload_per_zone
+        )
+    }
+  }
+  model
+}
+
+
+#' Build Solver Control Parameters
+#'
+#' Constructs a list of solver-specific parameters for ompr.roi::with_ROI().
+#' Different solvers accept different parameter names.
+#'
+#' @param solver Character scalar: `"glpk"`, `"highs"`, `"cbc"`, or `"symphony"`.
+#' @param max_time Numeric. Maximum solve time in seconds.
+#' @param rel_tol Numeric. Relative tolerance (0-1).
+#' @param verbose Logical. Whether to show solver output.
+#'
+#' @return List of named parameters for with_ROI().
+#' @keywords internal
+.solver_control_params <- function(solver, max_time, rel_tol, verbose) {
+  if (solver == "symphony") {
+    list(
+      solver = solver,
+      max_time = as.numeric(max_time),
+      gap_limit = rel_tol * 100,
+      verbose = verbose
+    )
+  } else {
+    list(
+      solver = solver,
+      max_time = as.numeric(max_time),
+      rel_tol = rel_tol,
+      verbose = verbose
+    )
+  }
+}
+
+
 #' Solve the Capacitated p-Median Problem for Fixed K
 #'
 #' Formulates and solves a mixed-integer linear program:
@@ -400,16 +473,18 @@ surveyzones_build_zones_single <- function(
 #' respect workload capacity, and minimise total weighted distance.
 #'
 #' @inheritParams surveyzones_build_zones
+#' @param full_sparse_distances Tibble of all distance pairs (unfiltered).
+#'   Will be filtered internally to D_max.
 #' @param K Integer.  Number of zones (centers) to open.
 #' @param candidates Character vector of candidate center tract_ids.
 #'
 #' @return A list with `assignments`, `zones`, and `diagnostics`.
 #' @keywords internal
 surveyzones_solve_fixed_K <- function(
-  sparse_distances,
   full_sparse_distances,
   tracts,
   K,
+  D_max,
   max_workload_per_zone,
   candidates,
   max_variables = 500000L,
@@ -427,6 +502,15 @@ surveyzones_solve_fixed_K <- function(
 
   # Build workload lookup
   workload <- stats::setNames(tracts$expected_service_time, tract_ids)
+
+  # Filter distances to this partition and D_max
+  part_ids <- tract_ids
+  sparse_distances <- full_sparse_distances |>
+    dplyr::filter(
+      travel_time <= D_max,
+      origin_id %in% part_ids,
+      destination_id %in% part_ids
+    )
 
   # Candidate centers: indices into tract_ids
   cand_idx <- which(tract_ids %in% candidates)
@@ -538,55 +622,23 @@ surveyzones_solve_fixed_K <- function(
       ompr::sum_over(y[j], j = 1:m) == K
     )
 
-  # Each tract assigned exactly once (loop: ompr sum_over doesn't
-
-  # support external vector indexing in quantified constraints)
-  for (i_val in seq_len(n)) {
-    ps <- which(pair_i == i_val)
-    model <- model |>
-      ompr::add_constraint(ompr::sum_over(x[p], p = ps) == 1)
-  }
-
-  # Workload capacity per center (skip for uncapacitated model)
+  # Add assignment and capacity constraints
+  model <- .add_assignment_constraints(model, pair_i, n)
   if (capacitated) {
-    for (j_val in seq_len(m)) {
-      ps <- which(pair_j == j_val)
-      if (length(ps) > 0) {
-        model <- model |>
-          ompr::add_constraint(
-            ompr::sum_over(w[pair_i[p]] * x[p], p = ps) <= max_workload_per_zone
-          )
-      }
-    }
+    model <- .add_capacity_constraints(model, pair_i, pair_j, w, m, max_workload_per_zone)
   }
 
-  # Solve — solver-specific parameter dispatch (cf. orce package)
+  # Solve with appropriate solver parameters
   solver_label <- toupper(solver)
   cli::cli_alert_info(
     "  K={K}: Solving MILP with {solver_label} (max_time={max_time}s, rel_tol={rel_tol})..."
   )
   solve_t0 <- proc.time()[["elapsed"]]
-  if (solver == "symphony") {
-    result <- ompr::solve_model(
-      model,
-      ompr.roi::with_ROI(
-        solver = solver,
-        max_time = as.numeric(max_time),
-        gap_limit = rel_tol * 100,
-        verbose = verbose
-      )
-    )
-  } else {
-    result <- ompr::solve_model(
-      model,
-      ompr.roi::with_ROI(
-        solver = solver,
-        max_time = as.numeric(max_time),
-        rel_tol = rel_tol,
-        verbose = verbose
-      )
-    )
-  }
+  params <- .solver_control_params(solver, max_time, rel_tol, verbose)
+  result <- ompr::solve_model(
+    model,
+    do.call(ompr.roi::with_ROI, params)
+  )
   solve_elapsed <- proc.time()[["elapsed"]] - solve_t0
 
   solve_time <- as.numeric(proc.time()["elapsed"] - start_time)
