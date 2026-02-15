@@ -6,15 +6,20 @@
 \usage{
 surveyzones_solve_fixed_K(
   sparse_distances,
+  full_sparse_distances,
   tracts,
   K,
   max_workload_per_zone,
   candidates,
-  max_variables = 500000L
+  max_variables = 500000L,
+  solver = "glpk",
+  max_time = 300,
+  rel_tol = 0.01,
+  verbose = FALSE
 )
 }
 \arguments{
-\item{sparse_distances}{A \code{data.table} of sparse distances as
+\item{sparse_distances}{A tibble of sparse distances as
 returned by \code{\link[=surveyzones_compute_sparse_distances]{surveyzones_compute_sparse_distances()}} or
 \code{\link[=surveyzones_precomputed_distances]{surveyzones_precomputed_distances()}}.}
 
@@ -24,12 +29,18 @@ returned by \code{\link[=surveyzones_compute_sparse_distances]{surveyzones_compu
 \item{K}{Integer.  Number of zones (centers) to open.}
 
 \item{max_workload_per_zone}{Numeric scalar.  Upper bound on
-the sum of \code{expected_service_time} within any zone.}
+the sum of \code{expected_service_time} within any zone.  Defaults
+to \code{Inf} (uncapacitated).}
 
 \item{candidates}{Character vector of candidate center tract_ids.}
 
 \item{max_variables}{Integer.  Safety limit on the number of
 x variables in the MILP.  Aborts if exceeded.}
+
+\item{solver}{Character scalar.  Which MILP solver backend to use.
+One of \code{"glpk"} (default), \code{"highs"}, or \code{"cbc"}.  The
+corresponding ROI plugin package must be installed (e.g.,
+\code{ROI.plugin.highs}).}
 }
 \value{
 A list with \code{assignments}, \code{zones}, and \code{diagnostics}.

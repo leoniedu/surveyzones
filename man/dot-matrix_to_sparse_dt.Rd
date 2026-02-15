@@ -2,7 +2,7 @@
 % Please edit documentation in R/distances.R
 \name{.matrix_to_sparse_dt}
 \alias{.matrix_to_sparse_dt}
-\title{Convert Distance Matrix to Sparse data.table}
+\title{Convert Distance Matrix to Sparse Tibble}
 \usage{
 .matrix_to_sparse_dt(mat, origin_ids, destination_ids, D_max)
 }
@@ -16,10 +16,10 @@
 \item{D_max}{Maximum distance threshold.}
 }
 \value{
-A \code{data.table} with columns \code{origin_id}, \code{destination_id},
+A tibble with columns \code{origin_id}, \code{destination_id},
 \code{travel_time}.
 }
 \description{
-Convert Distance Matrix to Sparse data.table
+Convert Distance Matrix to Sparse Tibble
 }
 \keyword{internal}

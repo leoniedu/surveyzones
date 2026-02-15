@@ -10,7 +10,7 @@
 #' **uncapacitated** p-median (no workload constraints, fewer MILP
 #' constraints, tighter LP relaxation, faster solve times).
 #'
-#' @param sparse_distances A `data.table` of sparse distances as
+#' @param sparse_distances A tibble of sparse distances as
 #'   returned by [surveyzones_compute_sparse_distances()] or
 #'   [surveyzones_precomputed_distances()].
 #' @param tracts A data.frame with columns `tract_id` and
@@ -73,7 +73,7 @@ surveyzones_build_zones <- function(
 
   # Filter distances to D_max
   n_before <- nrow(sparse_distances)
-  sparse_distances <- sparse_distances[travel_time <= D_max]
+  sparse_distances <- sparse_distances |> dplyr::filter(travel_time <= D_max)
   n_after <- nrow(sparse_distances)
 
   cli::cli_alert_info(
@@ -107,9 +107,8 @@ surveyzones_build_zones <- function(
 
     # Filter distances to this partition's tracts
     part_ids <- as.character(part_tracts$tract_id)
-    part_dist <- sparse_distances[
-      origin_id %in% part_ids & destination_id %in% part_ids
-    ]
+    part_dist <- sparse_distances |>
+      dplyr::filter(origin_id %in% part_ids, destination_id %in% part_ids)
     cli::cli_alert_info("Distance pairs for partition: {nrow(part_dist)}")
 
     part_candidates <- if (!is.null(candidates)) {
@@ -122,9 +121,8 @@ surveyzones_build_zones <- function(
     k_max_part <- K_max %||% nrow(part_tracts)
 
     # Full (unfiltered) distances for this partition, used for diameter
-    part_full_dist <- full_sparse_distances[
-      origin_id %in% part_ids & destination_id %in% part_ids
-    ]
+    part_full_dist <- full_sparse_distances |>
+      dplyr::filter(origin_id %in% part_ids, destination_id %in% part_ids)
 
     result <- surveyzones_build_zones_single(
       sparse_distances = part_dist,
@@ -292,13 +290,11 @@ surveyzones_build_zones_single <- function(
 
       cli::cli_alert_info("Component {ci}/{comp$no}: {comp_n} tracts")
 
-      comp_tracts <- tracts[tracts$tract_id %in% comp_ids, ]
-      comp_dist <- sparse_distances[
-        origin_id %in% comp_ids & destination_id %in% comp_ids
-      ]
-      comp_full_dist <- full_sparse_distances[
-        origin_id %in% comp_ids & destination_id %in% comp_ids
-      ]
+      comp_tracts <- tracts |> dplyr::filter(tract_id %in% comp_ids)
+      comp_dist <- sparse_distances |>
+        dplyr::filter(origin_id %in% comp_ids, destination_id %in% comp_ids)
+      comp_full_dist <- full_sparse_distances |>
+        dplyr::filter(origin_id %in% comp_ids, destination_id %in% comp_ids)
       comp_candidates <- intersect(candidates, comp_ids)
       comp_K_max <- min(K_max, comp_n)
 
@@ -446,26 +442,30 @@ surveyzones_solve_fixed_K <- function(
   }
 
   # Sparse pairs: (tract index i, candidate index j) where distance exists
-  dt <- data.table::copy(sparse_distances)
   # Map IDs to indices
   tract_to_idx <- stats::setNames(seq_len(n), tract_ids)
   cand_to_jdx <- stats::setNames(seq_along(cand_idx), tract_ids[cand_idx])
 
   # Keep only pairs where destination is a candidate
-  dt <- dt[destination_id %in% tract_ids[cand_idx]]
+  dt <- sparse_distances |>
+    dplyr::filter(destination_id %in% tract_ids[cand_idx])
+
   # Also allow self-assignment (center assigned to itself with distance 0)
-  self_pairs <- data.table::data.table(
+  self_pairs <- tibble::tibble(
     origin_id = tract_ids[cand_idx],
     destination_id = tract_ids[cand_idx],
     travel_time = 0
   )
-  dt <- data.table::rbindlist(list(dt, self_pairs))
-  dt <- unique(dt, by = c("origin_id", "destination_id"))
+  dt <- dplyr::bind_rows(dt, self_pairs) |>
+    dplyr::distinct(origin_id, destination_id, .keep_all = TRUE)
 
   # Map to numeric indices
-  dt[, i := tract_to_idx[origin_id]]
-  dt[, j := cand_to_jdx[destination_id]]
-  dt <- dt[!is.na(i) & !is.na(j)]
+  dt <- dt |>
+    dplyr::mutate(
+      i = tract_to_idx[origin_id],
+      j = cand_to_jdx[destination_id]
+    ) |>
+    dplyr::filter(!is.na(i), !is.na(j))
 
   n_x <- nrow(dt)
 
@@ -702,10 +702,12 @@ surveyzones_solve_fixed_K <- function(
     members <- zone_members[[zid]]
     n_members <- length(members)
     if (n_members <= 1L) return(0)
-    intra <- full_sparse_distances[
-      origin_id %in% members & destination_id %in% members &
+    intra <- full_sparse_distances |>
+      dplyr::filter(
+        origin_id %in% members,
+        destination_id %in% members,
         origin_id != destination_id
-    ]
+      )
     if (nrow(intra) == 0L) return(NA_real_)
     # Check completeness: need all n*(n-1)/2 unique unordered pairs
     pairs <- unique(paste0(

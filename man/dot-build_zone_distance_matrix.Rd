@@ -9,7 +9,7 @@
 \arguments{
 \item{tract_ids}{Character vector of tract identifiers.}
 
-\item{sparse_distances}{Sparse distance data.table.}
+\item{sparse_distances}{Sparse distance tibble.}
 }
 \value{
 A symmetric numeric matrix with row/col names = tract_ids.

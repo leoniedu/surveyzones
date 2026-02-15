@@ -7,16 +7,16 @@
 surveyzones_write_distance_store(
   distances,
   path,
-  backend = c("data.table", "arrow", "duckdb")
+  backend = c("csv", "arrow", "duckdb")
 )
 }
 \arguments{
-\item{distances}{A \code{data.table} as returned by
+\item{distances}{A tibble as returned by
 \code{\link[=surveyzones_compute_sparse_distances]{surveyzones_compute_sparse_distances()}}.}
 
 \item{path}{File path (directory for arrow, file for others).}
 
-\item{backend}{One of \code{"data.table"} (default), \code{"arrow"}, or
+\item{backend}{One of \code{"csv"} (default), \code{"arrow"}, or
 \code{"duckdb"}.}
 }
 \value{

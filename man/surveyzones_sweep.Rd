@@ -10,6 +10,7 @@ surveyzones_sweep(
   D_max_values,
   max_workload_values,
   enforce_partition = TRUE,
+  solver = "glpk",
   ...
 )
 }
@@ -25,12 +26,15 @@ values to try.}
 
 \item{enforce_partition}{Logical.}
 
+\item{solver}{Character scalar.  Which MILP solver backend to use.
+One of \code{"glpk"} (default), \code{"highs"}, or \code{"cbc"}.}
+
 \item{...}{Additional arguments passed to \code{\link[=surveyzones_build_zones]{surveyzones_build_zones()}}.}
 }
 \value{
 A tibble with one row per parameter combination and columns:
 \code{D_max}, \code{max_workload_per_zone}, \code{K_total},
-\code{n_infeasible_partitions}, \code{mean_radius}, \code{max_radius},
+\code{n_infeasible_partitions}, \code{mean_diameter}, \code{max_diameter},
 \code{mean_workload}, \code{objective_total}.
 }
 \description{

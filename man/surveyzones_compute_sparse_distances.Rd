@@ -23,7 +23,7 @@ Must contain a \code{tract_id} column.}
 \item{chunk_size}{Integer.  Number of origins per chunk.}
 }
 \value{
-A \code{data.table} with columns \code{origin_id}, \code{destination_id},
+A tibble with columns \code{origin_id}, \code{destination_id},
 and \code{travel_time}.  Only pairs with \code{travel_time <= D_max} are
 included; self-pairs are excluded.
 }

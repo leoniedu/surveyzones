@@ -44,12 +44,11 @@ test_that("sequencing returns a permutation of zone tracts", {
 })
 
 test_that("sequence_zone handles 2-tract zones", {
-  dists <- data.table::data.table(
+  dists <- tibble::tibble(
     origin_id = c("A", "B"),
     destination_id = c("B", "A"),
     travel_time = c(5, 5)
-  )
-  data.table::setkey(dists, origin_id, destination_id)
+  ) |> dplyr::arrange(origin_id, destination_id)
 
   result <- surveyzones_sequence_zone(c("A", "B"), dists)
   expect_equal(sort(result), c("A", "B"))
@@ -57,12 +56,11 @@ test_that("sequence_zone handles 2-tract zones", {
 })
 
 test_that("method parameter is passed through", {
-  dists <- data.table::data.table(
+  dists <- tibble::tibble(
     origin_id = c("A", "B", "A", "C", "B", "C"),
     destination_id = c("B", "A", "C", "A", "C", "B"),
     travel_time = c(1, 1, 3, 3, 2, 2)
-  )
-  data.table::setkey(dists, origin_id, destination_id)
+  ) |> dplyr::arrange(origin_id, destination_id)
 
   result <- surveyzones_sequence_zone(
     c("A", "B", "C"), dists, method = "nearest_insertion"

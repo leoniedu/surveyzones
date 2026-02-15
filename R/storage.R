@@ -2,10 +2,10 @@
 #'
 #' Persists a sparse distance table to disk.
 #'
-#' @param distances A `data.table` as returned by
+#' @param distances A tibble as returned by
 #'   [surveyzones_compute_sparse_distances()].
 #' @param path File path (directory for arrow, file for others).
-#' @param backend One of `"data.table"` (default), `"arrow"`, or
+#' @param backend One of `"csv"` (default), `"arrow"`, or
 #'   `"duckdb"`.
 #'
 #' @return `path`, invisibly.
@@ -14,13 +14,13 @@
 surveyzones_write_distance_store <- function(
     distances,
     path,
-    backend = c("data.table", "arrow", "duckdb")) {
+    backend = c("csv", "arrow", "duckdb")) {
 
   backend <- match.arg(backend)
 
   switch(backend,
-    data.table = {
-      data.table::fwrite(distances, path)
+    csv = {
+      readr::write_csv(distances, path)
     },
     arrow = {
       rlang::check_installed("arrow", reason = "to use the arrow backend")
@@ -44,35 +44,34 @@ surveyzones_write_distance_store <- function(
 #' Reads a sparse distance table from disk.
 #'
 #' @param path File path.
-#' @param backend One of `"data.table"` (default), `"arrow"`, or
+#' @param backend One of `"csv"` (default), `"arrow"`, or
 #'   `"duckdb"`.
 #'
-#' @return A `data.table` with columns `origin_id`, `destination_id`,
+#' @return A tibble with columns `origin_id`, `destination_id`,
 #'   `travel_time`.
 #'
 #' @export
 surveyzones_read_distance_store <- function(
     path,
-    backend = c("data.table", "arrow", "duckdb")) {
+    backend = c("csv", "arrow", "duckdb")) {
 
   backend <- match.arg(backend)
 
   dt <- switch(backend,
-    data.table = {
-      data.table::fread(path)
+    csv = {
+      readr::read_csv(path, show_col_types = FALSE)
     },
     arrow = {
       rlang::check_installed("arrow", reason = "to use the arrow backend")
-      data.table::as.data.table(arrow::read_parquet(path))
+      arrow::read_parquet(path)
     },
     duckdb = {
       rlang::check_installed(c("duckdb", "DBI"), reason = "to use the duckdb backend")
       con <- DBI::dbConnect(duckdb::duckdb(), dbdir = path, read_only = TRUE)
       on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
-      data.table::as.data.table(DBI::dbReadTable(con, "distances"))
+      DBI::dbReadTable(con, "distances") |> dplyr::as_tibble()
     }
   )
 
-  data.table::setkey(dt, origin_id, destination_id)
-  dt
+  dt |> dplyr::arrange(origin_id, destination_id)
 }

@@ -16,12 +16,12 @@ Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
 Imports:
     cli,
-    data.table,
     dplyr,
     ggplot2,
     igraph,
     ompr,
     ompr.roi,
+    readr,
     ROI.plugin.glpk,
     rlang,
     sf,

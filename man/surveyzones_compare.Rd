@@ -13,7 +13,7 @@ surveyzones_compare(plans)
 A tibble with one row per plan and columns:
 \code{plan_name}, \code{n_partitions}, \code{n_tracts}, \code{n_zones},
 \code{workload_min}, \code{workload_max}, \code{workload_mean},
-\code{radius_min}, \code{radius_max}, \code{radius_mean},
+\code{diameter_min}, \code{diameter_max}, \code{diameter_mean},
 \code{objective_total}.
 }
 \description{

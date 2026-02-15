@@ -11,7 +11,7 @@
 #'   [surveyzones_engine_haversine()]).  Default uses haversine in km.
 #' @param chunk_size Integer.  Number of origins per chunk.
 #'
-#' @return A `data.table` with columns `origin_id`, `destination_id`,
+#' @return A tibble with columns `origin_id`, `destination_id`,
 #'   and `travel_time`.  Only pairs with `travel_time <= D_max` are
 #'   included; self-pairs are excluded.
 #'
@@ -61,10 +61,9 @@ surveyzones_compute_sparse_distances <- function(
 
   cli::cli_progress_done(.envir = parent.frame())
 
-  dt <- data.table::rbindlist(results)
+  dt <- dplyr::bind_rows(results)
   # Ensure no duplicates from overlapping chunks (shouldn't happen, but safe)
-  data.table::setkey(dt, origin_id, destination_id)
-  unique(dt)
+  dt |> dplyr::distinct(origin_id, destination_id, .keep_all = TRUE)
 }
 
 
@@ -79,7 +78,7 @@ surveyzones_compute_sparse_distances <- function(
 #'   `destination_id`, and `travel_time`.
 #' @param D_max Numeric scalar.  Maximum distance to retain.
 #'
-#' @return A `data.table` with the same schema, filtered and keyed.
+#' @return A tibble with the same schema, filtered and sorted.
 #'
 #' @export
 surveyzones_precomputed_distances <- function(distance_table, D_max) {
@@ -95,9 +94,10 @@ surveyzones_precomputed_distances <- function(distance_table, D_max) {
     cli::cli_abort("{.arg D_max} must be a positive number.")
   }
 
-  dt <- data.table::as.data.table(distance_table)
-  dt <- dt[travel_time <= D_max & origin_id != destination_id]
-  data.table::setkey(dt, origin_id, destination_id)
+  dt <- distance_table |>
+    dplyr::as_tibble() |>
+    dplyr::filter(travel_time <= D_max, origin_id != destination_id) |>
+    dplyr::arrange(origin_id, destination_id)
   dt
 }
 
@@ -144,14 +144,14 @@ validate_access_points <- function(access_points,
 }
 
 
-#' Convert Distance Matrix to Sparse data.table
+#' Convert Distance Matrix to Sparse Tibble
 #'
 #' @param mat Numeric matrix (n_origins x n_destinations).
 #' @param origin_ids Character/integer vector of origin identifiers.
 #' @param destination_ids Character/integer vector of destination identifiers.
 #' @param D_max Maximum distance threshold.
 #'
-#' @return A `data.table` with columns `origin_id`, `destination_id`,
+#' @return A tibble with columns `origin_id`, `destination_id`,
 #'   `travel_time`.
 #' @keywords internal
 .matrix_to_sparse_dt <- function(mat, origin_ids, destination_ids, D_max) {
@@ -159,7 +159,7 @@ validate_access_points <- function(access_points,
   within <- which(!is.na(mat) & mat <= D_max, arr.ind = TRUE)
 
   if (nrow(within) == 0L) {
-    return(data.table::data.table(
+    return(tibble::tibble(
       origin_id = character(0L),
       destination_id = character(0L),
       travel_time = numeric(0L)
@@ -169,12 +169,12 @@ validate_access_points <- function(access_points,
   oi <- as.character(origin_ids[within[, 1L]])
   di <- as.character(destination_ids[within[, 2L]])
 
-  dt <- data.table::data.table(
+  dt <- tibble::tibble(
     origin_id = oi,
     destination_id = di,
     travel_time = mat[within]
   )
 
   # Remove self-pairs
- dt[origin_id != destination_id]
+  dt |> dplyr::filter(origin_id != destination_id)
 }

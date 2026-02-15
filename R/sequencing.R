@@ -84,7 +84,7 @@ surveyzones_sequence_zone <- function(tract_ids, sparse_distances,
 #' Build a Dense Distance Matrix for a Zone
 #'
 #' @param tract_ids Character vector of tract identifiers.
-#' @param sparse_distances Sparse distance data.table.
+#' @param sparse_distances Sparse distance tibble.
 #'
 #' @return A symmetric numeric matrix with row/col names = tract_ids.
 #'   Missing pairs filled with `Inf`.
@@ -96,9 +96,8 @@ surveyzones_sequence_zone <- function(tract_ids, sparse_distances,
   diag(mat) <- 0
 
   # Filter to within-zone pairs
-  dt <- sparse_distances[
-    origin_id %in% tract_ids & destination_id %in% tract_ids
-  ]
+  dt <- sparse_distances |>
+    dplyr::filter(origin_id %in% tract_ids, destination_id %in% tract_ids)
 
   if (nrow(dt) > 0) {
     for (r in seq_len(nrow(dt))) {

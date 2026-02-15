@@ -8,26 +8,39 @@ surveyzones_build_zones(
   sparse_distances,
   tracts,
   D_max,
-  max_workload_per_zone,
+  max_workload_per_zone = Inf,
+  target_zone_size = NULL,
   K_max = NULL,
   enforce_partition = TRUE,
   candidates = NULL,
-  max_variables = 500000L
+  max_variables = 500000L,
+  solver = "glpk",
+  max_time = 300,
+  rel_tol = 0.01,
+  verbose = FALSE
 )
 }
 \arguments{
-\item{sparse_distances}{A \code{data.table} of sparse distances as
+\item{sparse_distances}{A tibble of sparse distances as
 returned by \code{\link[=surveyzones_compute_sparse_distances]{surveyzones_compute_sparse_distances()}} or
 \code{\link[=surveyzones_precomputed_distances]{surveyzones_precomputed_distances()}}.}
 
 \item{tracts}{A data.frame with columns \code{tract_id} and
 \code{expected_service_time}.  Optionally \code{partition_id}.}
 
-\item{D_max}{Numeric scalar.  Maximum distance (must match
-the threshold used to build \code{sparse_distances}).}
+\item{D_max}{Numeric scalar.  Maximum distance.  Pairs in
+\code{sparse_distances} with \code{travel_time > D_max} are dropped
+before solving.}
 
 \item{max_workload_per_zone}{Numeric scalar.  Upper bound on
-the sum of \code{expected_service_time} within any zone.}
+the sum of \code{expected_service_time} within any zone.  Defaults
+to \code{Inf} (uncapacitated).}
+
+\item{target_zone_size}{Numeric scalar or \code{NULL}.  Desired number
+of tracts per zone, used to compute the initial number of zones
+K as \code{ceiling(n_tracts / target_zone_size)}.  When both
+\code{target_zone_size} and a finite \code{max_workload_per_zone} are
+given, K is the maximum of the two implied values.}
 
 \item{K_max}{Integer.  Safety cap on the number of zones per
 partition.}
@@ -41,12 +54,24 @@ candidates.}
 
 \item{max_variables}{Integer.  Safety limit on the number of
 x variables in the MILP.  Aborts if exceeded.}
+
+\item{solver}{Character scalar.  Which MILP solver backend to use.
+One of \code{"glpk"} (default), \code{"highs"}, or \code{"cbc"}.  The
+corresponding ROI plugin package must be installed (e.g.,
+\code{ROI.plugin.highs}).}
 }
 \value{
 A \code{surveyzones_plan} object.
 }
 \description{
 Top-level entry point that partitions tracts (optionally by
-jurisdiction), solves a capacitated p-median problem for each
-partition, and returns a combined \code{surveyzones_plan}.
+jurisdiction), solves a p-median problem for each partition,
+and returns a combined \code{surveyzones_plan}.
+}
+\details{
+When \code{max_workload_per_zone} is finite, solves a \strong{capacitated}
+p-median (zones cannot exceed the workload cap).
+When \code{max_workload_per_zone = Inf} (the default), solves an
+\strong{uncapacitated} p-median (no workload constraints, fewer MILP
+constraints, tighter LP relaxation, faster solve times).
 }

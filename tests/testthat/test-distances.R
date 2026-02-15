@@ -14,7 +14,7 @@ test_that("sparse distances have correct schema", {
     chunk_size = 2
   )
 
-  expect_s3_class(result, "data.table")
+  expect_s3_class(result, "tbl_df")
   expect_true(all(c("origin_id", "destination_id", "travel_time") %in% names(result)))
 })
 
@@ -29,7 +29,7 @@ test_that("sparse distances exclude self-pairs", {
   )
 
   result <- surveyzones_compute_sparse_distances(pts, D_max = 100)
-  self <- result[origin_id == destination_id]
+  self <- result |> dplyr::filter(origin_id == destination_id)
   expect_equal(nrow(self), 0)
 })
 
@@ -46,10 +46,11 @@ test_that("sparse distances respect D_max", {
   result <- surveyzones_compute_sparse_distances(pts, D_max = 5)
   expect_true(all(result$travel_time <= 5))
   # C should not appear in connections to A or B
-  far_pairs <- result[
-    (origin_id == "C" & destination_id %in% c("A", "B")) |
-    (destination_id == "C" & origin_id %in% c("A", "B"))
-  ]
+  far_pairs <- result |>
+    dplyr::filter(
+      (origin_id == "C" & destination_id %in% c("A", "B")) |
+      (destination_id == "C" & origin_id %in% c("A", "B"))
+    )
   expect_equal(nrow(far_pairs), 0)
 })
 

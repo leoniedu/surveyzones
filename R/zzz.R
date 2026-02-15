@@ -1,11 +1,7 @@
-#' @import data.table
 #' @keywords internal
 "_PACKAGE"
 
-# Ensure data.table NSE works inside the package
-.datatable.aware <- TRUE
-
-# Suppress R CMD check NOTEs for data.table/ompr/ggplot2 column references
+# Suppress R CMD check NOTEs for dplyr/ompr/ggplot2 column references
 utils::globalVariables(c(
   "origin_id", "destination_id", "travel_time",
   "i", "j",

@@ -4,19 +4,16 @@
 \alias{surveyzones_read_distance_store}
 \title{Read Sparse Distance Store}
 \usage{
-surveyzones_read_distance_store(
-  path,
-  backend = c("data.table", "arrow", "duckdb")
-)
+surveyzones_read_distance_store(path, backend = c("csv", "arrow", "duckdb"))
 }
 \arguments{
 \item{path}{File path.}
 
-\item{backend}{One of \code{"data.table"} (default), \code{"arrow"}, or
+\item{backend}{One of \code{"csv"} (default), \code{"arrow"}, or
 \code{"duckdb"}.}
 }
 \value{
-A \code{data.table} with columns \code{origin_id}, \code{destination_id},
+A tibble with columns \code{origin_id}, \code{destination_id},
 \code{travel_time}.
 }
 \description{

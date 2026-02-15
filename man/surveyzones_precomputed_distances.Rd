@@ -13,7 +13,7 @@ surveyzones_precomputed_distances(distance_table, D_max)
 \item{D_max}{Numeric scalar.  Maximum distance to retain.}
 }
 \value{
-A \code{data.table} with the same schema, filtered and keyed.
+A tibble with the same schema, filtered and sorted.
 }
 \description{
 Wraps an existing distance table into the sparse distance format

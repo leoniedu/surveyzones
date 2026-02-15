@@ -11,7 +11,7 @@ new_surveyzones_plan(assignments, zones, parameters, diagnostics)
 \code{partition_id}, \code{center_id}, \code{travel_time_to_center}.}
 
 \item{zones}{A tibble with columns \code{zone_id}, \code{partition_id},
-\code{center_tract_id}, \code{total_workload}, \code{radius}, \code{n_tracts}.}
+\code{center_tract_id}, \code{total_workload}, \code{diameter}, \code{n_tracts}.}
 
 \item{parameters}{A named list of model parameters.}
 
