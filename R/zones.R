@@ -670,70 +670,45 @@ surveyzones_solve_fixed_K <- function(
     ))
   }
 
+  # Build assignments with all columns in dplyr pipeline
   assignments <- tibble::tibble(
     tract_id = tract_ids[pair_i[active$p]],
     center_id = tract_ids[cand_idx[pair_j[active$p]]],
     travel_time_to_center = pair_d[active$p]
-  )
-  assignments$zone_id <- assignments$center_id
-  assignments$partition_id <- NA_character_
+  ) |>
+    dplyr::mutate(
+      zone_id = center_id,
+      partition_id = NA_character_
+    )
 
-  # Zone summary
+  # Zone summary with all columns in one pipeline
   zones <- assignments |>
     dplyr::summarise(
       center_tract_id = unique(center_id),
       total_workload = sum(workload[tract_id]),
       n_tracts = dplyr::n(),
+      partition_id = NA_character_,
       .by = zone_id
     )
-  zones$partition_id <- NA_character_
 
-  # Diameter: max pairwise distance among tracts in each zone.
-  # Uses full (unfiltered) sparse distances so peripheral pairs beyond
-  # D_max are included.  Returns NA when any member pair is missing
-  # from the distance table (true diameter unknown).
-  zone_members <- split(assignments$tract_id, assignments$zone_id)
-  zones$diameter <- vapply(zones$zone_id, function(zid) {
-    members <- zone_members[[zid]]
-    n_members <- length(members)
-    if (n_members <= 1L) return(0)
-    intra <- full_sparse_distances |>
-      dplyr::filter(
-        origin_id %in% members,
-        destination_id %in% members,
-        origin_id != destination_id
-      )
-    if (nrow(intra) == 0L) return(NA_real_)
-    # Check completeness: need all n*(n-1)/2 unique unordered pairs
-    pairs <- unique(paste0(
-      pmin(intra$origin_id, intra$destination_id), "|",
-      pmax(intra$origin_id, intra$destination_id)
-    ))
-    expected <- n_members * (n_members - 1L) %/% 2L
-    if (length(pairs) < expected) return(NA_real_)
-    max(intra$travel_time)
-  }, numeric(1))
+  # Compute zone diameters using helper function
+  zones$diameter <- purrr::map_dbl(
+    zones$zone_id,
+    \(zid) .compute_zone_diameter(
+      assignments$tract_id[assignments$zone_id == zid],
+      full_sparse_distances
+    )
+  )
 
   cli::cli_alert_info(
     "  K={K}: {nrow(zones)} zones, workload range [{round(min(zones$total_workload), 1)}-{round(max(zones$total_workload), 1)}], max diameter {round(max(zones$diameter, na.rm = TRUE), 2)} km"
   )
 
   list(
-    assignments = assignments[, c(
-      "tract_id",
-      "zone_id",
-      "partition_id",
-      "center_id",
-      "travel_time_to_center"
-    )],
-    zones = zones[, c(
-      "zone_id",
-      "partition_id",
-      "center_tract_id",
-      "total_workload",
-      "diameter",
-      "n_tracts"
-    )],
+    assignments = assignments |>
+      dplyr::select(tract_id, zone_id, partition_id, center_id, travel_time_to_center),
+    zones = zones |>
+      dplyr::select(zone_id, partition_id, center_tract_id, total_workload, diameter, n_tracts),
     diagnostics = list(
       solver_status = status,
       objective_value = ompr::objective_value(result),
@@ -741,6 +716,43 @@ surveyzones_solve_fixed_K <- function(
       solve_time = solve_time
     )
   )
+}
+
+
+#' Compute Zone Diameter
+#'
+#' Calculates the maximum pairwise distance within a zone.
+#' Uses the full (unfiltered) sparse distances so peripheral pairs
+#' beyond D_max are included. Returns NA when any member pair is
+#' missing from the distance table (true diameter unknown).
+#'
+#' @param tract_ids Character vector of tracts in the zone.
+#' @param full_sparse_distances Tibble of all distance pairs.
+#'
+#' @return Numeric scalar: maximum distance, or NA if incomplete.
+#' @keywords internal
+.compute_zone_diameter <- function(tract_ids, full_sparse_distances) {
+  n_members <- length(tract_ids)
+  if (n_members <= 1L) return(0)
+
+  intra <- full_sparse_distances |>
+    dplyr::filter(
+      origin_id %in% tract_ids,
+      destination_id %in% tract_ids,
+      origin_id != destination_id
+    )
+
+  if (nrow(intra) == 0L) return(NA_real_)
+
+  # Check completeness: need all n*(n-1)/2 unique unordered pairs
+  pairs <- unique(paste0(
+    pmin(intra$origin_id, intra$destination_id), "|",
+    pmax(intra$origin_id, intra$destination_id)
+  ))
+  expected <- n_members * (n_members - 1L) %/% 2L
+  if (length(pairs) < expected) return(NA_real_)
+
+  max(intra$travel_time)
 }
 
 
