@@ -1,4 +1,5 @@
 test_that("sequencing returns a permutation of zone tracts", {
+  skip_if_not_installed("ROI.plugin.glpk")
   # Create a small problem and solve it
   pts <- sf::st_as_sf(
     data.frame(
@@ -14,7 +15,7 @@ test_that("sequencing returns a permutation of zone tracts", {
     expected_service_time = c(1, 1, 1, 1)
   )
 
-  dists <- surveyzones_compute_sparse_distances(pts, D_max = 10)
+  dists <- surveyzones_compute_sparse_distances(pts)
 
   plan <- surveyzones_build_zones(
     sparse_distances = dists,
@@ -47,7 +48,7 @@ test_that("sequence_zone handles 2-tract zones", {
   dists <- tibble::tibble(
     origin_id = c("A", "B"),
     destination_id = c("B", "A"),
-    travel_time = c(5, 5)
+    distance = c(5, 5)
   ) |> dplyr::arrange(origin_id, destination_id)
 
   result <- surveyzones_sequence_zone(c("A", "B"), dists)
@@ -59,7 +60,7 @@ test_that("method parameter is passed through", {
   dists <- tibble::tibble(
     origin_id = c("A", "B", "A", "C", "B", "C"),
     destination_id = c("B", "A", "C", "A", "C", "B"),
-    travel_time = c(1, 1, 3, 3, 2, 2)
+    distance = c(1, 1, 3, 3, 2, 2)
   ) |> dplyr::arrange(origin_id, destination_id)
 
   result <- surveyzones_sequence_zone(

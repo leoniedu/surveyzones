@@ -5,7 +5,6 @@
 \title{Solve Zones for a Single Partition}
 \usage{
 surveyzones_build_zones_single(
-  sparse_distances,
   full_sparse_distances,
   tracts,
   D_max,
@@ -21,15 +20,13 @@ surveyzones_build_zones_single(
 )
 }
 \arguments{
-\item{sparse_distances}{A tibble of sparse distances as
-returned by \code{\link[=surveyzones_compute_sparse_distances]{surveyzones_compute_sparse_distances()}} or
-\code{\link[=surveyzones_precomputed_distances]{surveyzones_precomputed_distances()}}.}
+\item{full_sparse_distances}{Tibble of all distance pairs (unfiltered).}
 
 \item{tracts}{A data.frame with columns \code{tract_id} and
 \code{expected_service_time}.  Optionally \code{partition_id}.}
 
 \item{D_max}{Numeric scalar.  Maximum distance.  Pairs in
-\code{sparse_distances} with \code{travel_time > D_max} are dropped
+\code{sparse_distances} with \code{distance > D_max} are dropped
 before solving.}
 
 \item{max_workload_per_zone}{Numeric scalar.  Upper bound on
@@ -54,6 +51,14 @@ x variables in the MILP.  Aborts if exceeded.}
 One of \code{"glpk"} (default), \code{"highs"}, or \code{"cbc"}.  The
 corresponding ROI plugin package must be installed (e.g.,
 \code{ROI.plugin.highs}).}
+
+\item{max_time}{Numeric scalar.  Maximum seconds to spend solving each
+partition. Default \code{300}.}
+
+\item{rel_tol}{Numeric scalar.  Relative tolerance for solver convergence.
+Default \code{0.01}.}
+
+\item{verbose}{Logical.  Print solver progress messages? Default \code{FALSE}.}
 }
 \value{
 A list with \code{assignments}, \code{zones}, and \code{diagnostics}.

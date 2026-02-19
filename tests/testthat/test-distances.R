@@ -10,12 +10,11 @@ test_that("sparse distances have correct schema", {
 
   result <- surveyzones_compute_sparse_distances(
     access_points = pts,
-    D_max = 100,  # km, large enough to include all pairs
     chunk_size = 2
   )
 
   expect_s3_class(result, "tbl_df")
-  expect_true(all(c("origin_id", "destination_id", "travel_time") %in% names(result)))
+  expect_true(all(c("origin_id", "destination_id", "distance") %in% names(result)))
 })
 
 test_that("sparse distances exclude self-pairs", {
@@ -28,12 +27,12 @@ test_that("sparse distances exclude self-pairs", {
     coords = c("lon", "lat"), crs = 4326
   )
 
-  result <- surveyzones_compute_sparse_distances(pts, D_max = 100)
+  result <- surveyzones_compute_sparse_distances(pts)
   self <- result |> dplyr::filter(origin_id == destination_id)
   expect_equal(nrow(self), 0)
 })
 
-test_that("sparse distances respect D_max", {
+test_that("sparse distances can be filtered by D_max", {
   pts <- sf::st_as_sf(
     data.frame(
       tract_id = c("A", "B", "C"),
@@ -43,9 +42,12 @@ test_that("sparse distances respect D_max", {
     coords = c("lon", "lat"), crs = 4326
   )
 
-  result <- surveyzones_compute_sparse_distances(pts, D_max = 5)
-  expect_true(all(result$travel_time <= 5))
-  # C should not appear in connections to A or B
+  all_distances <- surveyzones_compute_sparse_distances(pts)
+  # Caller now filters by D_max
+  result <- all_distances |> dplyr::filter(distance <= 5)
+
+  expect_true(all(result$distance <= 5))
+  # C should not appear in connections to A or B when filtered
   far_pairs <- result |>
     dplyr::filter(
       (origin_id == "C" & destination_id %in% c("A", "B")) |
@@ -58,12 +60,12 @@ test_that("precomputed distances filter correctly", {
   dt <- data.frame(
     origin_id = c("A", "A", "B"),
     destination_id = c("B", "C", "C"),
-    travel_time = c(3, 10, 5)
+    distance = c(3, 10, 5)
   )
 
   result <- surveyzones_precomputed_distances(dt, D_max = 6)
   expect_equal(nrow(result), 2)  # only A-B (3) and B-C (5)
-  expect_true(all(result$travel_time <= 6))
+  expect_true(all(result$distance <= 6))
 })
 
 test_that("precomputed distances reject missing columns", {

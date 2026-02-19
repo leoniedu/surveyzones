@@ -14,7 +14,7 @@ surveyzones_read_distance_store(path, backend = c("csv", "arrow", "duckdb"))
 }
 \value{
 A tibble with columns \code{origin_id}, \code{destination_id},
-\code{travel_time}.
+\code{distance}.
 }
 \description{
 Reads a sparse distance table from disk.

@@ -17,7 +17,7 @@
 }
 \value{
 A tibble with columns \code{origin_id}, \code{destination_id},
-\code{travel_time}.
+\code{distance}.
 }
 \description{
 Convert Distance Matrix to Sparse Tibble

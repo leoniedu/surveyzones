@@ -1,3 +1,5 @@
+utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tracts"))
+
 #' Build Zones for Survey Tracts
 #'
 #' Top-level entry point that partitions tracts (optionally by
@@ -16,7 +18,7 @@
 #' @param tracts A data.frame with columns `tract_id` and
 #'   `expected_service_time`.  Optionally `partition_id`.
 #' @param D_max Numeric scalar.  Maximum distance.  Pairs in
-#'   `sparse_distances` with `travel_time > D_max` are dropped
+#'   `sparse_distances` with `distance > D_max` are dropped
 #'   before solving.
 #' @param max_workload_per_zone Numeric scalar.  Upper bound on
 #'   the sum of `expected_service_time` within any zone.  Defaults
@@ -39,6 +41,11 @@
 #'   One of `"glpk"` (default), `"highs"`, or `"cbc"`.  The
 #'   corresponding ROI plugin package must be installed (e.g.,
 #'   `ROI.plugin.highs`).
+#' @param max_time Numeric scalar.  Maximum seconds to spend solving each
+#'   partition. Default `300`.
+#' @param rel_tol Numeric scalar.  Relative tolerance for solver convergence.
+#'   Default `0.01`.
+#' @param verbose Logical.  Print solver progress messages? Default `FALSE`.
 #'
 #' @return A `surveyzones_plan` object.
 #'
@@ -70,7 +77,7 @@ surveyzones_build_zones <- function(
 
   # Count distances before and after D_max filtering
   n_before <- nrow(sparse_distances)
-  n_after <- nrow(sparse_distances |> dplyr::filter(travel_time <= D_max))
+  n_after <- nrow(sparse_distances |> dplyr::filter(distance <= D_max))
 
   cli::cli_alert_info(
     "Input: {nrow(tracts)} tracts, {n_after} distance pairs (filtered from {n_before} by D_max = {D_max})"
@@ -224,7 +231,7 @@ surveyzones_build_zones_single <- function(
   tract_ids_chr <- as.character(tracts$tract_id)
   sparse_distances <- full_sparse_distances |>
     dplyr::filter(
-      travel_time <= D_max,
+      distance <= D_max,
       origin_id %in% tract_ids_chr,
       destination_id %in% tract_ids_chr
     )
@@ -268,7 +275,7 @@ surveyzones_build_zones_single <- function(
           zone_id = comp_ids,
           partition_id = NA_character_,
           center_id = comp_ids,
-          travel_time_to_center = 0
+          distance_to_center = 0
         )
         all_comp_zones[[ci]] <- tibble::tibble(
           zone_id = comp_ids,
@@ -368,7 +375,7 @@ surveyzones_build_zones_single <- function(
       zone_id = character(0),
       partition_id = character(0),
       center_id = character(0),
-      travel_time_to_center = numeric(0)
+      distance_to_center = numeric(0)
     ),
     zones = tibble::tibble(
       zone_id = character(0),
@@ -507,7 +514,7 @@ surveyzones_solve_fixed_K <- function(
   part_ids <- tract_ids
   sparse_distances <- full_sparse_distances |>
     dplyr::filter(
-      travel_time <= D_max,
+      distance <= D_max,
       origin_id %in% part_ids,
       destination_id %in% part_ids
     )
@@ -533,7 +540,7 @@ surveyzones_solve_fixed_K <- function(
   self_pairs <- tibble::tibble(
     origin_id = tract_ids[cand_idx],
     destination_id = tract_ids[cand_idx],
-    travel_time = 0
+    distance = 0
   )
   dt <- dplyr::bind_rows(dt, self_pairs) |>
     dplyr::distinct(origin_id, destination_id, .keep_all = TRUE)
@@ -576,7 +583,7 @@ surveyzones_solve_fixed_K <- function(
         zone_id = character(0),
         partition_id = character(0),
         center_id = character(0),
-        travel_time_to_center = numeric(0)
+        distance_to_center = numeric(0)
       ),
       zones = tibble::tibble(
         zone_id = character(0),
@@ -600,7 +607,7 @@ surveyzones_solve_fixed_K <- function(
   # Index the sparse pairs as 1..n_x
   pair_i <- dt$i
   pair_j <- dt$j
-  pair_d <- dt$travel_time
+  pair_d <- dt$distance
 
   # Workload for each tract
   w <- workload[tract_ids]
@@ -670,7 +677,7 @@ surveyzones_solve_fixed_K <- function(
         zone_id = character(0),
         partition_id = character(0),
         center_id = character(0),
-        travel_time_to_center = numeric(0)
+        distance_to_center = numeric(0)
       ),
       zones = tibble::tibble(
         zone_id = character(0),
@@ -706,7 +713,7 @@ surveyzones_solve_fixed_K <- function(
       assignments = tibble::tibble(
         tract_id = character(0), zone_id = character(0),
         partition_id = character(0), center_id = character(0),
-        travel_time_to_center = numeric(0)
+        distance_to_center = numeric(0)
       ),
       zones = tibble::tibble(
         zone_id = character(0), partition_id = character(0),
@@ -726,7 +733,7 @@ surveyzones_solve_fixed_K <- function(
   assignments <- tibble::tibble(
     tract_id = tract_ids[pair_i[active$p]],
     center_id = tract_ids[cand_idx[pair_j[active$p]]],
-    travel_time_to_center = pair_d[active$p]
+    distance_to_center = pair_d[active$p]
   ) |>
     dplyr::mutate(
       zone_id = center_id,
@@ -753,12 +760,12 @@ surveyzones_solve_fixed_K <- function(
   )
 
   cli::cli_alert_info(
-    "  K={K}: {nrow(zones)} zones, workload range [{round(min(zones$total_workload), 1)}-{round(max(zones$total_workload), 1)}], max diameter {round(max(zones$diameter, na.rm = TRUE), 2)} km"
+    "  K={K}: {nrow(zones)} zones, workload range [{round(min(zones$total_workload), 1)}-{round(max(zones$total_workload), 1)}], max diameter {round(max(zones$diameter, na.rm = TRUE), 2)} (distance units)"
   )
 
   list(
     assignments = assignments |>
-      dplyr::select(tract_id, zone_id, partition_id, center_id, travel_time_to_center),
+      dplyr::select(tract_id, zone_id, partition_id, center_id, distance_to_center),
     zones = zones |>
       dplyr::select(zone_id, partition_id, center_tract_id, total_workload, diameter, n_tracts),
     diagnostics = list(
@@ -804,7 +811,7 @@ surveyzones_solve_fixed_K <- function(
   expected <- n_members * (n_members - 1L) %/% 2L
   if (length(pairs) < expected) return(NA_real_)
 
-  max(intra$travel_time)
+  max(intra$distance)
 }
 
 

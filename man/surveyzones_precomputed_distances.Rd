@@ -8,7 +8,7 @@ surveyzones_precomputed_distances(distance_table, D_max)
 }
 \arguments{
 \item{distance_table}{A data.frame with columns \code{origin_id},
-\code{destination_id}, and \code{travel_time}.}
+\code{destination_id}, and \code{distance}.}
 
 \item{D_max}{Numeric scalar.  Maximum distance to retain.}
 }

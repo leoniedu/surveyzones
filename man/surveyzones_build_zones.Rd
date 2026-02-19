@@ -29,7 +29,7 @@ returned by \code{\link[=surveyzones_compute_sparse_distances]{surveyzones_compu
 \code{expected_service_time}.  Optionally \code{partition_id}.}
 
 \item{D_max}{Numeric scalar.  Maximum distance.  Pairs in
-\code{sparse_distances} with \code{travel_time > D_max} are dropped
+\code{sparse_distances} with \code{distance > D_max} are dropped
 before solving.}
 
 \item{max_workload_per_zone}{Numeric scalar.  Upper bound on
@@ -59,6 +59,14 @@ x variables in the MILP.  Aborts if exceeded.}
 One of \code{"glpk"} (default), \code{"highs"}, or \code{"cbc"}.  The
 corresponding ROI plugin package must be installed (e.g.,
 \code{ROI.plugin.highs}).}
+
+\item{max_time}{Numeric scalar.  Maximum seconds to spend solving each
+partition. Default \code{300}.}
+
+\item{rel_tol}{Numeric scalar.  Relative tolerance for solver convergence.
+Default \code{0.01}.}
+
+\item{verbose}{Logical.  Print solver progress messages? Default \code{FALSE}.}
 }
 \value{
 A \code{surveyzones_plan} object.

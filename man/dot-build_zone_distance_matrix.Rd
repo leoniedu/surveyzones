@@ -12,8 +12,8 @@
 \item{sparse_distances}{Sparse distance tibble.}
 }
 \value{
-A symmetric numeric matrix with row/col names = tract_ids.
-Missing pairs filled with \code{Inf}.
+A numeric matrix with row/col names = tract_ids.
+Missing pairs filled with \code{Inf}. May be asymmetric.
 }
 \description{
 Build a Dense Distance Matrix for a Zone

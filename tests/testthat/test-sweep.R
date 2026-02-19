@@ -1,4 +1,5 @@
 test_that("sweep returns expected number of rows", {
+  skip_if_not_installed("ROI.plugin.glpk")
   pts <- sf::st_as_sf(
     data.frame(
       tract_id = sprintf("T%d", 1:6),
@@ -13,7 +14,7 @@ test_that("sweep returns expected number of rows", {
     expected_service_time = rep(1, 6)
   )
 
-  dists <- surveyzones_compute_sparse_distances(pts, D_max = 10)
+  dists <- surveyzones_compute_sparse_distances(pts)
 
   result <- surveyzones_sweep(
     sparse_distances = dists,
@@ -30,6 +31,7 @@ test_that("sweep returns expected number of rows", {
 })
 
 test_that("compare returns comparison tibble", {
+  skip_if_not_installed("ROI.plugin.glpk")
   pts <- sf::st_as_sf(
     data.frame(
       tract_id = sprintf("T%d", 1:4),
@@ -44,7 +46,7 @@ test_that("compare returns comparison tibble", {
     expected_service_time = rep(1, 4)
   )
 
-  dists <- surveyzones_compute_sparse_distances(pts, D_max = 10)
+  dists <- surveyzones_compute_sparse_distances(pts)
 
   plan_a <- surveyzones_build_zones(
     dists, tracts, D_max = 10, max_workload_per_zone = 2,

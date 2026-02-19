@@ -26,5 +26,6 @@ Character vector of tract_ids in visit order.
 }
 \description{
 Orders tracts by solving a Travelling Salesman Problem using the
-TSP package.
+TSP package. Uses symmetric TSP for symmetric matrices, asymmetric
+TSP (ATSP) for asymmetric distance matrices (e.g., from routing engines).
 }

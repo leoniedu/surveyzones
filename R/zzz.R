@@ -3,10 +3,10 @@
 
 # Suppress R CMD check NOTEs for dplyr/tidyr/ompr/ggplot2 column references
 utils::globalVariables(c(
-  "origin_id", "destination_id", "travel_time",
+  "origin_id", "destination_id", "distance",
   "i", "j",
   "x", "y", "p",
-  "center_id", "tract_id", "travel_time_to_center",
+  "center_id", "tract_id", "distance_to_center",
   "zone_id", "partition_id",
   "xend", "yend",
   "data"  # tidyr::nest() creates this variable

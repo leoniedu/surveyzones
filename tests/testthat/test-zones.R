@@ -1,4 +1,5 @@
 test_that("build_zones assigns all tracts exactly once", {
+  skip_if_not_installed("ROI.plugin.glpk")
   # Small problem: 6 tracts, close together, 2 partitions
   pts <- sf::st_as_sf(
     data.frame(
@@ -15,7 +16,7 @@ test_that("build_zones assigns all tracts exactly once", {
     partition_id = c("A", "A", "A", "B", "B", "B")
   )
 
-  dists <- surveyzones_compute_sparse_distances(pts, D_max = 10)
+  dists <- surveyzones_compute_sparse_distances(pts)
 
   plan <- surveyzones_build_zones(
     sparse_distances = dists,
@@ -33,6 +34,7 @@ test_that("build_zones assigns all tracts exactly once", {
 })
 
 test_that("no zone exceeds max_workload", {
+  skip_if_not_installed("ROI.plugin.glpk")
   pts <- sf::st_as_sf(
     data.frame(
       tract_id = sprintf("T%d", 1:4),
@@ -47,7 +49,7 @@ test_that("no zone exceeds max_workload", {
     expected_service_time = c(1.5, 1.5, 1.5, 1.5)
   )
 
-  dists <- surveyzones_compute_sparse_distances(pts, D_max = 10)
+  dists <- surveyzones_compute_sparse_distances(pts)
 
   plan <- surveyzones_build_zones(
     sparse_distances = dists,
@@ -61,6 +63,7 @@ test_that("no zone exceeds max_workload", {
 })
 
 test_that("partition boundaries are respected", {
+  skip_if_not_installed("ROI.plugin.glpk")
   pts <- sf::st_as_sf(
     data.frame(
       tract_id = sprintf("T%d", 1:4),
@@ -76,7 +79,7 @@ test_that("partition boundaries are respected", {
     partition_id = c("A", "A", "B", "B")
   )
 
-  dists <- surveyzones_compute_sparse_distances(pts, D_max = 10)
+  dists <- surveyzones_compute_sparse_distances(pts)
 
   plan <- surveyzones_build_zones(
     sparse_distances = dists,
@@ -122,6 +125,7 @@ test_that("validate_tracts catches problems", {
 })
 
 test_that("print and summary don't error", {
+  skip_if_not_installed("ROI.plugin.glpk")
   pts <- sf::st_as_sf(
     data.frame(
       tract_id = sprintf("T%d", 1:4),
@@ -136,7 +140,7 @@ test_that("print and summary don't error", {
     expected_service_time = c(1, 1, 1, 1)
   )
 
-  dists <- surveyzones_compute_sparse_distances(pts, D_max = 10)
+  dists <- surveyzones_compute_sparse_distances(pts)
 
   plan <- surveyzones_build_zones(
     sparse_distances = dists,
@@ -157,10 +161,12 @@ test_that("validate_solver rejects invalid solvers", {
 })
 
 test_that("validate_solver accepts valid solvers", {
+  skip_if_not_installed("ROI.plugin.glpk")
   expect_invisible(validate_solver("glpk"))
 })
 
 test_that("solver parameter is recorded in plan", {
+  skip_if_not_installed("ROI.plugin.glpk")
   pts <- sf::st_as_sf(
     data.frame(
       tract_id = sprintf("T%d", 1:4),
@@ -175,7 +181,7 @@ test_that("solver parameter is recorded in plan", {
     expected_service_time = c(1, 1, 1, 1)
   )
 
-  dists <- surveyzones_compute_sparse_distances(pts, D_max = 10)
+  dists <- surveyzones_compute_sparse_distances(pts)
 
   plan <- surveyzones_build_zones(
     sparse_distances = dists,
@@ -206,7 +212,7 @@ test_that("highs solver produces valid zones", {
     expected_service_time = c(1, 1, 1, 1)
   )
 
-  dists <- surveyzones_compute_sparse_distances(pts, D_max = 10)
+  dists <- surveyzones_compute_sparse_distances(pts)
 
   plan <- surveyzones_build_zones(
     sparse_distances = dists,
@@ -240,7 +246,7 @@ test_that("cbc solver produces valid zones", {
     expected_service_time = c(1, 1, 1, 1)
   )
 
-  dists <- surveyzones_compute_sparse_distances(pts, D_max = 10)
+  dists <- surveyzones_compute_sparse_distances(pts)
 
   plan <- surveyzones_build_zones(
     sparse_distances = dists,
@@ -258,6 +264,7 @@ test_that("cbc solver produces valid zones", {
 })
 
 test_that("target_zone_size determines K correctly", {
+  skip_if_not_installed("ROI.plugin.glpk")
   pts <- sf::st_as_sf(
     data.frame(
       tract_id = sprintf("T%d", 1:6),
@@ -272,7 +279,7 @@ test_that("target_zone_size determines K correctly", {
     expected_service_time = rep(1, 6)
   )
 
-  dists <- surveyzones_compute_sparse_distances(pts, D_max = 10)
+  dists <- surveyzones_compute_sparse_distances(pts)
 
   # target_zone_size = 2 -> K = ceil(6/2) = 3 zones
   plan <- surveyzones_build_zones(
@@ -290,6 +297,7 @@ test_that("target_zone_size determines K correctly", {
 })
 
 test_that("uncapacitated model skips workload constraints", {
+  skip_if_not_installed("ROI.plugin.glpk")
   pts <- sf::st_as_sf(
     data.frame(
       tract_id = sprintf("T%d", 1:6),
@@ -304,7 +312,7 @@ test_that("uncapacitated model skips workload constraints", {
     expected_service_time = rep(1, 6)
   )
 
-  dists <- surveyzones_compute_sparse_distances(pts, D_max = 10)
+  dists <- surveyzones_compute_sparse_distances(pts)
 
   # Uncapacitated: max_workload = Inf, target_zone_size = 3 -> K = 2
   plan <- surveyzones_build_zones(
@@ -322,6 +330,7 @@ test_that("uncapacitated model skips workload constraints", {
 })
 
 test_that("error when neither target_zone_size nor finite max_workload", {
+  skip_if_not_installed("ROI.plugin.glpk")
   pts <- sf::st_as_sf(
     data.frame(
       tract_id = sprintf("T%d", 1:4),
@@ -336,7 +345,7 @@ test_that("error when neither target_zone_size nor finite max_workload", {
     expected_service_time = c(1, 1, 1, 1)
   )
 
-  dists <- surveyzones_compute_sparse_distances(pts, D_max = 10)
+  dists <- surveyzones_compute_sparse_distances(pts)
 
   expect_error(
     surveyzones_build_zones(
@@ -350,6 +359,7 @@ test_that("error when neither target_zone_size nor finite max_workload", {
 })
 
 test_that("both target_zone_size and max_workload uses max K", {
+  skip_if_not_installed("ROI.plugin.glpk")
   pts <- sf::st_as_sf(
     data.frame(
       tract_id = sprintf("T%d", 1:6),
@@ -364,7 +374,7 @@ test_that("both target_zone_size and max_workload uses max K", {
     expected_service_time = rep(1, 6)
   )
 
-  dists <- surveyzones_compute_sparse_distances(pts, D_max = 10)
+  dists <- surveyzones_compute_sparse_distances(pts)
 
   # target_zone_size = 3 -> K_size = 2
   # max_workload = 2 -> K_workload = ceil(6/2) = 3

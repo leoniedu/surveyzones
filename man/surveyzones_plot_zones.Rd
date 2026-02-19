@@ -8,7 +8,11 @@ surveyzones_plot_zones(
   plan,
   tracts_sf,
   show_centers = TRUE,
-  show_sequence = FALSE
+  show_sequence = FALSE,
+  interactive = FALSE,
+  plot_engine = "auto",
+  show_connectivity = FALSE,
+  show_labels = FALSE
 )
 }
 \arguments{
@@ -22,11 +26,26 @@ surveyzones_plot_zones(
 \item{show_sequence}{Logical.  Draw visit-order arrows?
 Requires that \code{\link[=surveyzones_sequence]{surveyzones_sequence()}} has been called on \code{plan}.
 Default \code{FALSE}.}
+
+\item{interactive}{Logical.  Deprecated. Use \code{plot_engine} instead.
+Default \code{FALSE}.}
+
+\item{plot_engine}{Character.  Engine for rendering: \code{"ggplot2"} (static),
+\code{"plotly"} (interactive, ggplot-based), \code{"leaflet"} (interactive, tile-based),
+\code{"mapgl"} (interactive, modern vector tiles), or \code{"auto"} (default).
+When \code{plot_engine="auto"}, prioritizes mapgl if available, then plotly,
+then leaflet, then falls back to ggplot2.}
+
+\item{show_connectivity}{Logical.  Draw edges showing connectivity graph
+within D_max? Requires \code{sparse_distances} from plan. Default \code{FALSE}.}
+
+\item{show_labels}{Logical.  Show zone IDs as text labels? Default \code{FALSE}.}
 }
 \value{
-A \code{ggplot} object.
+A \code{ggplot} object (ggplot2 engine), \code{plotly} object (plotly engine),
+\code{leaflet} map object (leaflet engine), or \code{mapgl} map object (mapgl engine).
 }
 \description{
-Visualise zone assignments on a map.  Requires tract geometries
-to be provided as an sf object.
+Visualise zone assignments on a map with optional interactive mode.
+Requires tract geometries to be provided as an sf object.
 }

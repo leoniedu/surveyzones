@@ -3,7 +3,7 @@
 #' Constructor for the S3 class returned by [surveyzones_build_zones()].
 #'
 #' @param assignments A tibble with columns `tract_id`, `zone_id`,
-#'   `partition_id`, `center_id`, `travel_time_to_center`.
+#'   `partition_id`, `center_id`, `distance_to_center`.
 #' @param zones A tibble with columns `zone_id`, `partition_id`,
 #'   `center_tract_id`, `total_workload`, `diameter`, `n_tracts`.
 #' @param parameters A named list of model parameters.

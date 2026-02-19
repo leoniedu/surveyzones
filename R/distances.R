@@ -1,33 +1,30 @@
-#' Compute Sparse Pairwise Distances
+#' Compute All Pairwise Distances
 #'
-#' Computes distances between tract access points using a pluggable
-#' engine, keeping only pairs within `D_max`.  Distances are computed
-#' in chunks to avoid materialising a full N x N matrix.
+#' Computes distances between tract access points using a pluggable engine.
+#' Distances are computed in chunks to avoid materialising a full N x N matrix.
+#' Returns all non-self pairs; filtering by distance threshold should be done
+#' by the caller (e.g., in [surveyzones_build_zones()]) to allow reuse with
+#' different distance thresholds without recomputation.
 #'
 #' @param access_points An sf object with POINT geometries.
 #'   Must contain a `tract_id` column.
-#' @param D_max Numeric scalar.  Maximum distance to retain.
 #' @param engine A distance engine function (see
 #'   [surveyzones_engine_haversine()]).  Default uses haversine in km.
 #' @param chunk_size Integer.  Number of origins per chunk.
 #'
 #' @return A tibble with columns `origin_id`, `destination_id`,
-#'   and `travel_time`.  Only pairs with `travel_time <= D_max` are
-#'   included; self-pairs are excluded.
+#'   and `distance`.  All non-self pairs are included; self-pairs are
+#'   excluded. For asymmetric engines (e.g., OSRM), both directional pairs
+#'   are included (if present in the engine output).
 #'
 #' @export
 surveyzones_compute_sparse_distances <- function(
     access_points,
-    D_max,
     engine = surveyzones_engine_haversine(),
     chunk_size = 100L) {
 
   validate_engine(engine)
   validate_access_points(access_points)
-
-  if (!is.numeric(D_max) || length(D_max) != 1 || D_max <= 0) {
-    cli::cli_abort("{.arg D_max} must be a positive number.")
-  }
 
   tract_ids <- access_points$tract_id
   n <- length(tract_ids)
@@ -47,12 +44,12 @@ surveyzones_compute_sparse_distances <- function(
     # engine returns an n_chunk x N matrix
     dist_mat <- engine(origins, access_points)
 
-    # Convert to long format and filter
+    # Convert to long format (no filtering)
     chunk_dt <- .matrix_to_sparse_dt(
       dist_mat,
       origin_ids = tract_ids[idx],
       destination_ids = tract_ids,
-      D_max = D_max
+      D_max = Inf
     )
 
     results[[i]] <- chunk_dt
@@ -75,14 +72,14 @@ surveyzones_compute_sparse_distances <- function(
 #' database, or a pre-built dodgr matrix).
 #'
 #' @param distance_table A data.frame with columns `origin_id`,
-#'   `destination_id`, and `travel_time`.
+#'   `destination_id`, and `distance`.
 #' @param D_max Numeric scalar.  Maximum distance to retain.
 #'
 #' @return A tibble with the same schema, filtered and sorted.
 #'
 #' @export
 surveyzones_precomputed_distances <- function(distance_table, D_max) {
-  required <- c("origin_id", "destination_id", "travel_time")
+  required <- c("origin_id", "destination_id", "distance")
   missing_cols <- setdiff(required, names(distance_table))
   if (length(missing_cols) > 0) {
     cli::cli_abort(
@@ -96,7 +93,7 @@ surveyzones_precomputed_distances <- function(distance_table, D_max) {
 
   dt <- distance_table |>
     dplyr::as_tibble() |>
-    dplyr::filter(travel_time <= D_max, origin_id != destination_id) |>
+    dplyr::filter(distance <= D_max, origin_id != destination_id) |>
     dplyr::arrange(origin_id, destination_id)
   dt
 }
@@ -152,7 +149,7 @@ validate_access_points <- function(access_points,
 #' @param D_max Maximum distance threshold.
 #'
 #' @return A tibble with columns `origin_id`, `destination_id`,
-#'   `travel_time`.
+#'   `distance`.
 #' @keywords internal
 .matrix_to_sparse_dt <- function(mat, origin_ids, destination_ids, D_max) {
   # Find pairs within D_max (excluding self-pairs and NAs)
@@ -162,7 +159,7 @@ validate_access_points <- function(access_points,
     return(tibble::tibble(
       origin_id = character(0L),
       destination_id = character(0L),
-      travel_time = numeric(0L)
+      distance = numeric(0L)
     ))
   }
 
@@ -172,7 +169,7 @@ validate_access_points <- function(access_points,
   dt <- tibble::tibble(
     origin_id = oi,
     destination_id = di,
-    travel_time = mat[within]
+    distance = mat[within]
   )
 
   # Remove self-pairs

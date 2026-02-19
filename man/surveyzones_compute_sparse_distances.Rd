@@ -2,11 +2,10 @@
 % Please edit documentation in R/distances.R
 \name{surveyzones_compute_sparse_distances}
 \alias{surveyzones_compute_sparse_distances}
-\title{Compute Sparse Pairwise Distances}
+\title{Compute All Pairwise Distances}
 \usage{
 surveyzones_compute_sparse_distances(
   access_points,
-  D_max,
   engine = surveyzones_engine_haversine(),
   chunk_size = 100L
 )
@@ -15,8 +14,6 @@ surveyzones_compute_sparse_distances(
 \item{access_points}{An sf object with POINT geometries.
 Must contain a \code{tract_id} column.}
 
-\item{D_max}{Numeric scalar.  Maximum distance to retain.}
-
 \item{engine}{A distance engine function (see
 \code{\link[=surveyzones_engine_haversine]{surveyzones_engine_haversine()}}).  Default uses haversine in km.}
 
@@ -24,11 +21,14 @@ Must contain a \code{tract_id} column.}
 }
 \value{
 A tibble with columns \code{origin_id}, \code{destination_id},
-and \code{travel_time}.  Only pairs with \code{travel_time <= D_max} are
-included; self-pairs are excluded.
+and \code{distance}.  All non-self pairs are included; self-pairs are
+excluded. For asymmetric engines (e.g., OSRM), both directional pairs
+are included (if present in the engine output).
 }
 \description{
-Computes distances between tract access points using a pluggable
-engine, keeping only pairs within \code{D_max}.  Distances are computed
-in chunks to avoid materialising a full N x N matrix.
+Computes distances between tract access points using a pluggable engine.
+Distances are computed in chunks to avoid materialising a full N x N matrix.
+Returns all non-self pairs; filtering by distance threshold should be done
+by the caller (e.g., in \code{\link[=surveyzones_build_zones]{surveyzones_build_zones()}}) to allow reuse with
+different distance thresholds without recomputation.
 }

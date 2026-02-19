@@ -8,7 +8,7 @@ new_surveyzones_plan(assignments, zones, parameters, diagnostics)
 }
 \arguments{
 \item{assignments}{A tibble with columns \code{tract_id}, \code{zone_id},
-\code{partition_id}, \code{center_id}, \code{travel_time_to_center}.}
+\code{partition_id}, \code{center_id}, \code{distance_to_center}.}
 
 \item{zones}{A tibble with columns \code{zone_id}, \code{partition_id},
 \code{center_tract_id}, \code{total_workload}, \code{diameter}, \code{n_tracts}.}

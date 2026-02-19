@@ -48,7 +48,7 @@ surveyzones_write_distance_store <- function(
 #'   `"duckdb"`.
 #'
 #' @return A tibble with columns `origin_id`, `destination_id`,
-#'   `travel_time`.
+#'   `distance`.
 #'
 #' @export
 surveyzones_read_distance_store <- function(
