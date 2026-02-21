@@ -43,6 +43,57 @@ surveyzones_sequence <- function(plan, sparse_distances,
 }
 
 
+#' Sequence Zones Within Each Partition
+#'
+#' Given a solved plan, finds an optimal visit order for the zones within each
+#' partition by solving an ATSP over zone centers. Structurally identical to
+#' [surveyzones_sequence()] but operates at the zone level rather than the
+#' tract level.
+#'
+#' @param plan A `surveyzones_plan` object.
+#' @param sparse_distances Sparse distance table (as returned by
+#'   [surveyzones_compute_sparse_distances()]).
+#' @param method Character scalar. TSP solving method passed to
+#'   [TSP::solve_TSP()]. Default `"nn"` (nearest neighbour).
+#'   Other useful options: `"repetitive_nn"`, `"nearest_insertion"`,
+#'   `"cheapest_insertion"`, `"two_opt"`.
+#'
+#' @return The same `plan` with `plan$zone_sequence` populated — a tibble
+#'   with columns `partition_id`, `zone_id`, `zone_order`.
+#'
+#' @export
+surveyzones_sequence_zones <- function(plan, sparse_distances, method = "nn") {
+  if (!inherits(plan, "surveyzones_plan")) {
+    cli::cli_abort("{.arg plan} must be a {.cls surveyzones_plan} object.")
+  }
+
+  plan$zone_sequence <- plan$zones |>
+    tidyr::nest(data = -partition_id) |>
+    dplyr::mutate(
+      ordered = purrr::map(
+        data,
+        \(z) surveyzones_sequence_zone(
+          tract_ids        = z$center_tract_id,
+          sparse_distances = sparse_distances,
+          method           = method
+        )
+      )
+    ) |>
+    dplyr::select(-data) |>
+    tidyr::unnest_longer(ordered, values_to = "center_tract_id") |>
+    dplyr::left_join(
+      plan$zones |> dplyr::select(zone_id, center_tract_id),
+      by = "center_tract_id"
+    ) |>
+    dplyr::group_by(partition_id) |>
+    dplyr::mutate(zone_order = dplyr::row_number()) |>
+    dplyr::ungroup() |>
+    dplyr::select(partition_id, zone_id, zone_order)
+
+  plan
+}
+
+
 #' Check if a Matrix is Symmetric
 #'
 #' @param mat Numeric matrix.

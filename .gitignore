@@ -11,3 +11,5 @@
 
 # Claude Code local settings
 .claude/
+
+/.quarto/
