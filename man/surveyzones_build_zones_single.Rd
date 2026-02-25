@@ -16,7 +16,8 @@ surveyzones_build_zones_single(
   solver = "glpk",
   max_time = 300,
   rel_tol = 0.01,
-  verbose = FALSE
+  verbose = FALSE,
+  strategy = "auto"
 )
 }
 \arguments{
@@ -59,6 +60,15 @@ partition. Default \code{300}.}
 Default \code{0.01}.}
 
 \item{verbose}{Logical.  Print solver progress messages? Default \code{FALSE}.}
+
+\item{strategy}{Character scalar.  Solving strategy for capacitated problems
+(when \code{max_workload_per_zone} is finite).  \code{"auto"} (default) uses
+\code{"uncap_then_split"} when \code{max_workload_per_zone} is finite and \code{"direct"}
+otherwise.  \code{"uncap_then_split"} solves the uncapacitated p-median first
+(fast), then recursively splits any zone that exceeds the workload cap into
+smaller zones — each split sub-problem is tiny and solved instantly.
+\code{"direct"} uses the capacitated MILP directly (may be slow for large
+instances).}
 }
 \value{
 A list with \code{assignments}, \code{zones}, and \code{diagnostics}.

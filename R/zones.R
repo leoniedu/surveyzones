@@ -1,56 +1,7 @@
 utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tracts"))
 
-#' Build Zones for Survey Tracts
-#'
-#' Top-level entry point that partitions tracts (optionally by
-#' jurisdiction), solves a p-median problem for each partition,
-#' and returns a combined `surveyzones_plan`.
-#'
-#' When `max_workload_per_zone` is finite, solves a **capacitated**
-#' p-median (zones cannot exceed the workload cap).
-#' When `max_workload_per_zone = Inf` (the default), solves an
-#' **uncapacitated** p-median (no workload constraints, fewer MILP
-#' constraints, tighter LP relaxation, faster solve times).
-#'
-#' @param sparse_distances A tibble of sparse distances as
-#'   returned by [surveyzones_compute_sparse_distances()] or
-#'   [surveyzones_precomputed_distances()].
-#' @param tracts A data.frame with columns `tract_id` and
-#'   `expected_service_time`.  Optionally `partition_id`.
-#' @param D_max Numeric scalar.  Maximum distance.  Pairs in
-#'   `sparse_distances` with `distance > D_max` are dropped
-#'   before solving.
-#' @param max_workload_per_zone Numeric scalar.  Upper bound on
-#'   the sum of `expected_service_time` within any zone.  Defaults
-#'   to `Inf` (uncapacitated).
-#' @param target_zone_size Numeric scalar or `NULL`.  Desired number
-#'   of tracts per zone, used to compute the initial number of zones
-#'   K as `ceiling(n_tracts / target_zone_size)`.  When both
-#'   `target_zone_size` and a finite `max_workload_per_zone` are
-#'   given, K is the maximum of the two implied values.
-#' @param K_max Integer.  Safety cap on the number of zones per
-#'   partition.
-#' @param enforce_partition Logical.  Whether to split by
-#'   `partition_id` (default `TRUE`).
-#' @param candidates Optional character vector of tract_ids eligible
-#'   to be zone centers.  `NULL` (default) means all tracts are
-#'   candidates.
-#' @param max_variables Integer.  Safety limit on the number of
-#'   x variables in the MILP.  Aborts if exceeded.
-#' @param solver Character scalar.  Which MILP solver backend to use.
-#'   One of `"glpk"` (default), `"highs"`, or `"cbc"`.  The
-#'   corresponding ROI plugin package must be installed (e.g.,
-#'   `ROI.plugin.highs`).
-#' @param max_time Numeric scalar.  Maximum seconds to spend solving each
-#'   partition. Default `300`.
-#' @param rel_tol Numeric scalar.  Relative tolerance for solver convergence.
-#'   Default `0.01`.
-#' @param verbose Logical.  Print solver progress messages? Default `FALSE`.
-#'
-#' @return A `surveyzones_plan` object.
-#'
-#' @export
-surveyzones_build_zones <- function(
+#' @keywords internal
+.surveyzones_build_zones_impl <- function(
   sparse_distances,
   tracts,
   D_max,
@@ -63,7 +14,8 @@ surveyzones_build_zones <- function(
   solver = "glpk",
   max_time = 300,
   rel_tol = 0.01,
-  verbose = FALSE
+  verbose = FALSE,
+  strategy = "auto"
 ) {
   validate_tracts(tracts)
   validate_solver(solver)
@@ -129,7 +81,8 @@ surveyzones_build_zones <- function(
       solver = solver,
       max_time = max_time,
       rel_tol = rel_tol,
-      verbose = verbose
+      verbose = verbose,
+      strategy = strategy
     )
 
     # Tag with partition_id
@@ -176,6 +129,119 @@ surveyzones_build_zones <- function(
 }
 
 
+#' Build Zones for Survey Tracts
+#'
+#' Top-level entry point that partitions tracts (optionally by
+#' jurisdiction), solves a p-median problem for each partition,
+#' and returns a combined `surveyzones_plan`.
+#'
+#' When `max_workload_per_zone` is finite, solves a **capacitated**
+#' p-median (zones cannot exceed the workload cap).
+#' When `max_workload_per_zone = Inf` (the default), solves an
+#' **uncapacitated** p-median (no workload constraints, fewer MILP
+#' constraints, tighter LP relaxation, faster solve times).
+#'
+#' Results are cached to disk by default (`use_cache = TRUE`): repeated calls
+#' with identical arguments return instantly without re-running the solver.
+#' Use `surveyzones_clear_cache()` to wipe the cache.
+#'
+#' @param sparse_distances A tibble of sparse distances as
+#'   returned by [surveyzones_compute_sparse_distances()] or
+#'   [surveyzones_precomputed_distances()].
+#' @param tracts A data.frame with columns `tract_id` and
+#'   `expected_service_time`.  Optionally `partition_id`.
+#' @param D_max Numeric scalar.  Maximum distance.  Pairs in
+#'   `sparse_distances` with `distance > D_max` are dropped
+#'   before solving.
+#' @param max_workload_per_zone Numeric scalar.  Upper bound on
+#'   the sum of `expected_service_time` within any zone.  Defaults
+#'   to `Inf` (uncapacitated).
+#' @param target_zone_size Numeric scalar or `NULL`.  Desired number
+#'   of tracts per zone, used to compute the initial number of zones
+#'   K as `ceiling(n_tracts / target_zone_size)`.  When both
+#'   `target_zone_size` and a finite `max_workload_per_zone` are
+#'   given, K is the maximum of the two implied values.
+#' @param K_max Integer.  Safety cap on the number of zones per
+#'   partition.
+#' @param enforce_partition Logical.  Whether to split by
+#'   `partition_id` (default `TRUE`).
+#' @param candidates Optional character vector of tract_ids eligible
+#'   to be zone centers.  `NULL` (default) means all tracts are
+#'   candidates.
+#' @param max_variables Integer.  Safety limit on the number of
+#'   x variables in the MILP.  Aborts if exceeded.
+#' @param solver Character scalar.  Which MILP solver backend to use.
+#'   One of `"glpk"` (default), `"highs"`, or `"cbc"`.  The
+#'   corresponding ROI plugin package must be installed (e.g.,
+#'   `ROI.plugin.highs`).
+#' @param max_time Numeric scalar.  Maximum seconds to spend solving each
+#'   partition. Default `300`.
+#' @param rel_tol Numeric scalar.  Relative tolerance for solver convergence.
+#'   Default `0.01`.
+#' @param verbose Logical.  Print solver progress messages? Default `FALSE`.
+#' @param strategy Character scalar.  Solving strategy for capacitated problems
+#'   (when `max_workload_per_zone` is finite).  `"auto"` (default) uses
+#'   `"uncap_then_split"` when `max_workload_per_zone` is finite and `"direct"`
+#'   otherwise.  `"uncap_then_split"` solves the uncapacitated p-median first
+#'   (fast), then recursively splits any zone that exceeds the workload cap into
+#'   smaller zones — each split sub-problem is tiny and solved instantly.
+#'   `"direct"` uses the capacitated MILP directly (may be slow for large
+#'   instances).
+#' @param use_cache Logical.  Whether to use the disk cache (default `TRUE`).
+#'   Set to `FALSE` to force re-computation.
+#'
+#' @return A `surveyzones_plan` object.
+#'
+#' @export
+surveyzones_build_zones <- function(
+  sparse_distances,
+  tracts,
+  D_max,
+  max_workload_per_zone = Inf,
+  target_zone_size = NULL,
+  K_max = NULL,
+  enforce_partition = TRUE,
+  candidates = NULL,
+  max_variables = 500000L,
+  solver = "glpk",
+  max_time = 300,
+  rel_tol = 0.01,
+  verbose = FALSE,
+  strategy = "auto",
+  use_cache = TRUE
+) {
+  args <- list(
+    sparse_distances      = sparse_distances,
+    tracts                = tracts,
+    D_max                 = D_max,
+    max_workload_per_zone = max_workload_per_zone,
+    target_zone_size      = target_zone_size,
+    K_max                 = K_max,
+    enforce_partition     = enforce_partition,
+    candidates            = candidates,
+    max_variables         = max_variables,
+    solver                = solver,
+    max_time              = max_time,
+    rel_tol               = rel_tol,
+    verbose               = verbose,
+    strategy              = strategy
+  )
+
+  if (use_cache) {
+    is_cached <- do.call(memoise::has_cache(surveyzones_build_zones_mem), args)
+    if (is_cached) {
+      cli::cli_alert_success("Using cached result.")
+    } else {
+      cli::cli_alert_info("Computing and caching result.")
+    }
+    do.call(surveyzones_build_zones_mem, args)
+  } else {
+    cli::cli_alert_info("Computing without cache.")
+    do.call(.surveyzones_build_zones_impl, args)
+  }
+}
+
+
 #' Solve Zones for a Single Partition
 #'
 #' Tries increasing values of K (number of zones) until a feasible
@@ -199,7 +265,8 @@ surveyzones_build_zones_single <- function(
   solver = "glpk",
   max_time = 300,
   rel_tol = 0.01,
-  verbose = FALSE
+  verbose = FALSE,
+  strategy = "auto"
 ) {
   n <- nrow(tracts)
   total_workload <- sum(tracts$expected_service_time)
@@ -252,7 +319,7 @@ surveyzones_build_zones_single <- function(
   if (comp$no > 1) {
     comp_sizes <- sort(comp$csize, decreasing = TRUE)
     cli::cli_alert_info(
-      "{comp$no} connected components (sizes: {paste(comp_sizes, collapse = ', ')})"
+      "Disconnected graph: {comp$no} components (sizes: {paste(comp_sizes, collapse = ', ')}) — solving each independently"
     )
 
     # Map each tract to its component
@@ -288,6 +355,55 @@ surveyzones_build_zones_single <- function(
         next
       }
 
+      # Small-component shortcut: if the component's total workload fits in one
+      # zone, K=1 is the only feasible (and therefore optimal) solution.
+      # Pick the medoid as center and skip the solver entirely.
+      comp_wl <- sum(tracts$expected_service_time[tracts$tract_id %in% comp_ids])
+      if (!is.infinite(max_workload_per_zone) && comp_wl <= max_workload_per_zone) {
+        # Pre-filter to intra-component distances only (small table, fast lookup)
+        comp_dists <- full_sparse_distances |>
+          dplyr::filter(
+            .data$origin_id %in% comp_ids,
+            .data$destination_id %in% comp_ids,
+            .data$origin_id != .data$destination_id
+          )
+        center_id <- if (nrow(comp_dists) > 0L) {
+          comp_dists |>
+            dplyr::summarise(
+              total_dist = sum(.data$distance), .by = "origin_id"
+            ) |>
+            dplyr::slice_min(.data$total_dist, n = 1L, with_ties = FALSE) |>
+            dplyr::pull(.data$origin_id)
+        } else {
+          comp_ids[[1L]]
+        }
+        # Look up distances in comp_dists (tiny), not full_sparse_distances
+        dist_to_ctr <- purrr::map_dbl(comp_ids, \(tid) {
+          if (tid == center_id) return(0)
+          d <- comp_dists$distance[
+            comp_dists$origin_id == tid &
+              comp_dists$destination_id == center_id
+          ]
+          if (length(d) == 0L) NA_real_ else d[[1L]]
+        })
+        all_comp_assignments[[ci]] <- tibble::tibble(
+          tract_id = comp_ids,
+          zone_id = center_id,
+          partition_id = NA_character_,
+          center_id = center_id,
+          distance_to_center = dist_to_ctr
+        )
+        all_comp_zones[[ci]] <- tibble::tibble(
+          zone_id = center_id,
+          partition_id = NA_character_,
+          center_tract_id = center_id,
+          total_workload = comp_wl,
+          diameter = if (nrow(comp_dists) > 0L) max(comp_dists$distance) else 0,
+          n_tracts = comp_n
+        )
+        next
+      }
+
       cli::cli_alert_info("Component {ci}/{comp$no}: {comp_n} tracts")
 
       comp_tracts <- tracts |> dplyr::filter(tract_id %in% comp_ids)
@@ -309,7 +425,8 @@ surveyzones_build_zones_single <- function(
         solver = solver,
         max_time = max_time,
         rel_tol = rel_tol,
-        verbose = verbose
+        verbose = verbose,
+        strategy = strategy
       )
 
       all_comp_assignments[[ci]] <- comp_result$assignments
@@ -324,7 +441,7 @@ surveyzones_build_zones_single <- function(
     elapsed <- proc.time()[["elapsed"]] - start_time
 
     cli::cli_alert_success(
-      "All {comp$no} components solved: {nrow(combined_zones)} zones in {round(elapsed, 1)}s"
+      "All {comp$no} subgraphs solved: {nrow(combined_zones)} zones in {round(elapsed, 1)}s"
     )
 
     return(list(
@@ -339,6 +456,31 @@ surveyzones_build_zones_single <- function(
     ))
   }
   # ── End component decomposition ────────────────────────────────────────────
+
+  # ── uncap_then_split strategy ──────────────────────────────────────────────
+  # Resolve strategy: "auto" → "uncap_then_split" when capacitated, else "direct"
+  effective_strategy <- if (strategy == "auto") {
+    if (capacitated) "uncap_then_split" else "direct"
+  } else {
+    strategy
+  }
+
+  if (effective_strategy == "uncap_then_split" && capacitated) {
+    return(.uncap_then_split(
+      full_sparse_distances = full_sparse_distances,
+      tracts = tracts,
+      K0 = K0,
+      D_max = D_max,
+      max_workload_per_zone = max_workload_per_zone,
+      candidates = candidates,
+      max_variables = max_variables,
+      solver = solver,
+      max_time = max_time,
+      rel_tol = rel_tol,
+      verbose = verbose
+    ))
+  }
+  # ── End uncap_then_split ────────────────────────────────────────────────────
 
   for (K in seq(K0, K_max)) {
     cli::cli_alert("Trying K = {K}...")
@@ -773,6 +915,165 @@ surveyzones_solve_fixed_K <- function(
       objective_value = ompr::objective_value(result),
       n_variables = as.integer(n_x),
       solve_time = solve_time
+    )
+  )
+}
+
+
+#' Uncapacitated-then-Split Heuristic
+#'
+#' Solves the uncapacitated p-median (fast), then recursively splits any zone
+#' whose total workload exceeds `max_workload_per_zone` into sub-zones.
+#' Each split sub-problem contains only the tracts of the oversized zone, so
+#' it is tiny and solved almost instantly.
+#'
+#' @inheritParams surveyzones_build_zones
+#' @param K0 Integer. Initial number of zones (lower bound).
+#' @param candidates Character vector of candidate center tract_ids.
+#' @return A list with `assignments`, `zones`, and `diagnostics`.
+#' @keywords internal
+.uncap_then_split <- function(
+  full_sparse_distances,
+  tracts,
+  K0,
+  D_max,
+  max_workload_per_zone,
+  candidates,
+  max_variables,
+  solver,
+  max_time,
+  rel_tol,
+  verbose
+) {
+  start_time <- proc.time()[["elapsed"]]
+
+  cli::cli_alert_info(
+    "Strategy: uncap_then_split — solving uncapacitated with K = {K0}, then splitting oversized zones"
+  )
+
+  # Phase 1: uncapacitated solve (fast)
+  uncap_result <- surveyzones_solve_fixed_K(
+    full_sparse_distances = full_sparse_distances,
+    tracts = tracts,
+    K = K0,
+    D_max = D_max,
+    max_workload_per_zone = Inf,
+    candidates = candidates,
+    max_variables = max_variables,
+    solver = solver,
+    max_time = max_time,
+    rel_tol = rel_tol,
+    verbose = verbose
+  )
+
+  if (uncap_result$diagnostics$solver_status != "optimal") {
+    cli::cli_alert_warning("Uncapacitated solve failed; falling back to direct capacitated MILP")
+    return(uncap_result)
+  }
+
+  # Phase 2: find oversized zones and split them
+  workload_by_tract <- stats::setNames(
+    tracts$expected_service_time, as.character(tracts$tract_id)
+  )
+
+  zone_summary <- uncap_result$assignments |>
+    dplyr::mutate(.wl = workload_by_tract[.data$tract_id]) |>
+    dplyr::summarise(total_wl = sum(.data$.wl), .by = "zone_id")
+
+  oversized <- zone_summary |>
+    dplyr::filter(.data$total_wl > max_workload_per_zone) |>
+    dplyr::pull(.data$zone_id)
+
+  n_over <- length(oversized)
+  if (n_over == 0L) {
+    cli::cli_alert_success("All zones satisfy the workload cap — no splitting needed")
+    return(uncap_result)
+  }
+
+  cli::cli_alert_info("{n_over} oversized zone{?s} to split")
+
+  good_assignments <- uncap_result$assignments |>
+    dplyr::filter(!.data$zone_id %in% oversized)
+  good_zones <- uncap_result$zones |>
+    dplyr::filter(!.data$zone_id %in% oversized)
+
+  split_assignments <- vector("list", n_over)
+  split_zones <- vector("list", n_over)
+
+  for (idx in seq_along(oversized)) {
+    zid <- oversized[[idx]]
+    zone_tract_ids <- uncap_result$assignments$tract_id[
+      uncap_result$assignments$zone_id == zid
+    ]
+    zone_tracts <- tracts |> dplyr::filter(.data$tract_id %in% zone_tract_ids)
+    zone_wl <- sum(workload_by_tract[zone_tract_ids])
+    K_split <- ceiling(zone_wl / max_workload_per_zone)
+
+    cli::cli_alert_info(
+      "  Splitting zone {zid} ({length(zone_tract_ids)} tracts, wl={round(zone_wl,1)}) into K={K_split}"
+    )
+
+    sub_dist <- full_sparse_distances |>
+      dplyr::filter(
+        .data$origin_id %in% zone_tract_ids,
+        .data$destination_id %in% zone_tract_ids
+      )
+
+    # Sub-problem is tiny: use direct capacitated MILP (fast for small n)
+    sub_result <- surveyzones_solve_fixed_K(
+      full_sparse_distances = sub_dist,
+      tracts = zone_tracts,
+      K = K_split,
+      D_max = D_max,
+      max_workload_per_zone = max_workload_per_zone,
+      candidates = zone_tract_ids,
+      max_variables = max_variables,
+      solver = solver,
+      max_time = max_time,
+      rel_tol = rel_tol,
+      verbose = verbose
+    )
+
+    if (sub_result$diagnostics$solver_status != "optimal") {
+      cli::cli_alert_warning(
+        "  Split of zone {zid} failed - keeping original oversized zone"
+      )
+      good_assignments <- dplyr::bind_rows(
+        good_assignments,
+        uncap_result$assignments |> dplyr::filter(.data$zone_id == zid)
+      )
+      good_zones <- dplyr::bind_rows(
+        good_zones,
+        uncap_result$zones |> dplyr::filter(.data$zone_id == zid)
+      )
+    } else {
+      split_assignments[[idx]] <- sub_result$assignments
+      split_zones[[idx]] <- sub_result$zones
+    }
+  }
+
+  final_assignments <- dplyr::bind_rows(
+    good_assignments,
+    dplyr::bind_rows(split_assignments)
+  )
+  final_zones <- dplyr::bind_rows(
+    good_zones,
+    dplyr::bind_rows(split_zones)
+  )
+
+  elapsed <- proc.time()[["elapsed"]] - start_time
+  cli::cli_alert_success(
+    "uncap_then_split: {nrow(final_zones)} zones in {round(elapsed, 1)}s"
+  )
+
+  list(
+    assignments = final_assignments,
+    zones = final_zones,
+    diagnostics = list(
+      solver_status = "optimal",
+      objective_value = sum(final_assignments$distance_to_center, na.rm = TRUE),
+      n_variables = uncap_result$diagnostics$n_variables,
+      solve_time = elapsed
     )
   )
 }

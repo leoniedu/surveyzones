@@ -17,7 +17,9 @@ surveyzones_build_zones(
   solver = "glpk",
   max_time = 300,
   rel_tol = 0.01,
-  verbose = FALSE
+  verbose = FALSE,
+  strategy = "auto",
+  use_cache = TRUE
 )
 }
 \arguments{
@@ -67,6 +69,18 @@ partition. Default \code{300}.}
 Default \code{0.01}.}
 
 \item{verbose}{Logical.  Print solver progress messages? Default \code{FALSE}.}
+
+\item{strategy}{Character scalar.  Solving strategy for capacitated problems
+(when \code{max_workload_per_zone} is finite).  \code{"auto"} (default) uses
+\code{"uncap_then_split"} when \code{max_workload_per_zone} is finite and \code{"direct"}
+otherwise.  \code{"uncap_then_split"} solves the uncapacitated p-median first
+(fast), then recursively splits any zone that exceeds the workload cap into
+smaller zones — each split sub-problem is tiny and solved instantly.
+\code{"direct"} uses the capacitated MILP directly (may be slow for large
+instances).}
+
+\item{use_cache}{Logical.  Whether to use the disk cache (default \code{TRUE}).
+Set to \code{FALSE} to force re-computation.}
 }
 \value{
 A \code{surveyzones_plan} object.
@@ -82,4 +96,8 @@ p-median (zones cannot exceed the workload cap).
 When \code{max_workload_per_zone = Inf} (the default), solves an
 \strong{uncapacitated} p-median (no workload constraints, fewer MILP
 constraints, tighter LP relaxation, faster solve times).
+
+Results are cached to disk by default (\code{use_cache = TRUE}): repeated calls
+with identical arguments return instantly without re-running the solver.
+Use \code{surveyzones_clear_cache()} to wipe the cache.
 }

@@ -1,0 +1,426 @@
+---
+title: "Zoning census tracts with real 2022 Census data"
+author: "Eduardo Leoni, IBGE"
+date: "February 2026"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Zoning census tracts with real 2022 Census data}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment  = "#>",
+  eval     = TRUE
+)
+
+```
+
+## Motivation
+
+Designing survey fieldwork in a large country like Brazil is a logistics problem
+at its core. A household survey may cover thousands of census tracts across dozens
+of districts. Without a principled zoning strategy, field coordinators spend more
+time planning routes than collecting data.
+
+**surveyzones** automates this: given a set of geographic units and a workload
+estimate per unit, it finds the minimum number of compact, balanced zones using a
+capacitated p-median MILP. This article walks through a complete pipeline using
+the city of Rio de Janeiro as an example:
+
+1. Get the list of census tracts from [censobr](https://ipeagit.github.io/censobr/)
+2. Define strata as **subdistricts** (administrative sub-divisions of the city)
+3. Draw a stratified random sample of tracts
+4. Download CNEFE household addresses for the sampled tracts via
+   [cnefetools](https://github.com/pedreirajr/cnefetools)
+5. Compute one **representative access point** per tract using kernel density
+   estimation on geocoded addresses
+6. Build zones and evaluate
+
+## Setup
+
+```{r libraries}
+library(censobr)      # 2022 Census tract list
+library(cnefetools)   # CNEFE household addresses (IBGE)
+library(surveyzones)
+library(dplyr)
+library(sf)
+library(ggplot2)
+library(mapgl)
+
+set.seed(2022)
+```
+
+## Step 1 — Census tract list for Rio de Janeiro
+
+We use `censobr::read_tracts()` to get the complete list of census tracts in the
+city of Rio de Janeiro (municipality code `3304557`). The key variable here is
+not population but the **tract code**, which encodes the subdistrict in its first
+11 characters.
+
+```{r tracts}
+tracts_rj <- read_tracts(year = 2022, dataset = "Preliminares") |>
+  collect() |>
+  filter(code_muni == 3304557) |>
+  select(code_tract, code_muni, name_muni, V0001) |>  # V0001 = population
+  filter(V0001 > 0)
+
+# Tract code structure (15 chars): muni(7) + district(2) + subdistrict(2) + sector(4)
+# Rio de Janeiro city has a single district, so use subdistrict (chars 1–11) as strata
+tracts_rj <- tracts_rj |>
+  mutate(subdistrict = substr(code_tract, 1, 11))
+
+glimpse(tracts_rj)
+```
+
+## Step 2 — Stratified sample of tracts
+
+Subdistricts are the strata (Rio de Janeiro city has a single district but 33
+subdistricts). We draw up to **20 tracts per subdistrict**.
+
+```{r sample}
+n_per_stratum <- 20L
+set.seed(20091975)
+sampled_tracts_0 <- tracts_rj |>
+  group_by(subdistrict) |>
+  slice_sample(n = n_per_stratum) |>
+  ungroup()
+
+cat(
+  "Sampled", nrow(sampled_tracts_0), "tracts across",
+  n_distinct(sampled_tracts_0$subdistrict), "subdistricts\n"
+)
+```
+
+## Step 2b — Tract characteristics: favela status
+
+We enrich the sample frame with `code_favela` from `censobr::read_tracts(dataset
+= "ResponsavelRenda")`: non-`NA` when the tract belongs to a recognised
+*aglomerado subnormal* (favela / informal settlement).
+
+This defines the **partition**: zones must not mix *comunidade* tracts with
+regular tracts, reflecting the distinct access conditions and interviewer
+protocols in each type of area.
+
+```{r tract-chars}
+tract_chars <- read_tracts(year = 2022, dataset = "ResponsavelRenda") |>
+  collect() |>
+  filter(code_muni == 3304557) |>
+  select(code_tract, code_favela)
+
+sampled_tracts <- sampled_tracts_0 |>
+  left_join(tract_chars, by = "code_tract") |>
+  mutate(
+    partition_id = if_else(!is.na(code_favela), "comunidade", "regular")
+  )
+
+cat("Partition distribution:\n")
+print(table(sampled_tracts$partition_id, useNA = "always"))
+```
+
+## Step 3 — Download CNEFE household addresses
+
+`cnefetools::read_cnefe()` downloads and caches all geocoded addresses in a
+municipality. We collect the full table and then filter to the sampled tracts.
+
+```{r cnefe}
+# Downloads ~3 million addresses for Rio de Janeiro city (cached after first run)
+cnefe_rj <- read_cnefe(code_muni = 3304557) |> collect()
+
+# COD_SETOR in cnefetools has a trailing species letter (e.g. "330455705060002P")
+# censobr code_tract is the 15-digit numeric prefix — strip before joining
+cnefe_sample <- cnefe_rj |>
+  mutate(code_tract = substr(COD_SETOR, 1, 15)) |>
+  filter(code_tract %in% sampled_tracts$code_tract)
+
+cat(
+  nrow(cnefe_sample), "addresses across",
+  n_distinct(cnefe_sample$code_tract), "tracts\n"
+)
+```
+
+> **Note:** Some tracts may have zero geocoded addresses in CNEFE. They are
+> excluded automatically in the next step and are not assigned to any zone.
+
+## Step 4 — Representative access point per tract
+
+`surveyzones_representative_points()` uses kernel density estimation on the
+geocoded addresses to find the highest-concentration location within each tract.
+This gives field interviewers a practical starting point — the spot where most
+dwellings are concentrated.
+
+The function expects `LATITUDE` and `LONGITUDE` from cnefetools; we pass
+`code_tract` (the cleaned 15-digit code) as `tract_col`.
+
+```{r repr-points}
+access_pts <- surveyzones_representative_points(
+  cnefe_sample,
+  tract_col = "code_tract"
+)
+
+# Add subdistrict, population, and partition from the sample frame
+access_pts <- access_pts |>
+  left_join(
+    sampled_tracts |> select(tract_id = code_tract, subdistrict, V0001, partition_id),
+    by = "tract_id"
+  )
+
+print(head(access_pts))
+```
+
+## Step 5 — Build zones
+
+We compute pairwise haversine distances and solve a capacitated p-median: each
+zone covers at most **5 tracts** within a **3 km** radius of its center. The
+solver first finds a fast uncapacitated solution, then splits any oversized zone
+into balanced sub-zones.
+
+```{r distances}
+distances <- surveyzones_compute_sparse_distances(
+  access_points = access_pts,
+  engine        = surveyzones_engine_haversine(units = "km")
+)
+```
+
+We build the plan **twice** — once ignoring partition and once enforcing it —
+so we can compare the results directly.
+
+```{r zones}
+tracts_df <- st_drop_geometry(access_pts) |> mutate(expected_service_time = 1L)
+
+plan_no_partition <- surveyzones_build_zones(
+  sparse_distances      = distances,
+  tracts                = tracts_df,
+  D_max                 = 3,
+  max_workload_per_zone = 5L,
+  enforce_partition     = FALSE,
+  solver                = "highs",
+  strategy              = "auto"
+)
+
+plan_partition <- surveyzones_build_zones(
+  sparse_distances      = distances,
+  tracts                = tracts_df,
+  D_max                 = 3,
+  max_workload_per_zone = 5L,
+  enforce_partition     = TRUE, # comunidade / regular solved separately
+  solver                = "highs",
+  strategy              = "auto"
+)
+
+print(plan_no_partition)
+print(plan_partition)
+```
+
+## Step 6 — Evaluate
+
+### Zone statistics
+
+```{r stats-no-partition, fig.width=8, fig.height=4, out.width="100%"}
+cat("--- Without partitioning ---\n")
+surveyzones_plot_statistics(plan_no_partition, type = "all")
+```
+
+```{r stats-partition, fig.width=8, fig.height=4, out.width="100%"}
+cat("--- With partitioning ---\n")
+surveyzones_plot_statistics(plan_partition, type = "all")
+```
+
+### Maps
+
+Tracts are coloured by `partition_id` (*comunidade* vs *regular*). Without
+partitioning, zone hulls may contain mixed colours; with partitioning, each
+hull is monochromatic.
+
+```{r map-helper}
+color_by <- function(x, palette = "Set2", seed = 42) {
+  lvls <- unique(x)
+  pal  <- grDevices::hcl.colors(length(lvls), palette = palette)
+  withr::with_seed(seed, pal <- sample(pal))
+  pal[match(x, lvls)]
+}
+
+make_map <- function(plan) {
+  pts <- access_pts |>
+    left_join(plan$assignments, by = "tract_id", suffix = c("", "_plan")) |>
+    mutate(color = color_by(partition_id)) |>
+    st_transform(5880L)
+
+  hulls <- pts |>
+    group_by(zone_id) |>
+    summarise(
+      color    = first(color),
+      geometry = st_buffer(st_convex_hull(st_union(geometry)), dist = 300),
+      .groups  = "drop"
+    )
+
+  mapboxgl(bounds = pts, style = mapbox_style("satellite-streets")) |>
+    add_fill_layer(
+      id                 = "hulls",
+      source             = hulls,
+      fill_color         = list("get", "color"),
+      fill_outline_color = "black",
+      fill_opacity       = 0.4,
+      tooltip            = "zone_id"
+    ) |>
+    add_circle_layer(
+      id             = "tracts",
+      source         = pts,
+      circle_color   = list("get", "color"),
+      circle_radius  = 5,
+      circle_opacity = 0.9,
+      tooltip        = "tract_id"
+    )
+}
+```
+
+#### Without partitioning
+
+```{r map-no-partition, eval=knitr::pandoc_to() == "html"}
+make_map(plan_no_partition)
+```
+
+```{r map-no-partition-static, echo=FALSE, eval=knitr::pandoc_to() != "html"}
+tmp <- tempfile(fileext = ".html")
+htmlwidgets::saveWidget(make_map(plan_no_partition), tmp, selfcontained = TRUE)
+invisible(webshot2::webshot(tmp, file = "map_no_partition.png",
+  delay = 3, zoom = 2, vwidth = 1200, vheight = 800))
+knitr::include_graphics("map_no_partition.png")
+```
+
+#### With partitioning
+
+```{r map-partition, eval=knitr::pandoc_to() == "html"}
+make_map(plan_partition)
+```
+
+```{r map-partition-static, echo=FALSE, eval=knitr::pandoc_to() != "html"}
+tmp <- tempfile(fileext = ".html")
+htmlwidgets::saveWidget(make_map(plan_partition), tmp, selfcontained = TRUE)
+invisible(webshot2::webshot(tmp, file = "map_partition.png",
+  delay = 3, zoom = 2, vwidth = 1200, vheight = 800))
+knitr::include_graphics("map_partition.png")
+```
+
+## Next steps
+
+Once you have a plan, sequence visits within and between zones:
+
+```{r sequence, eval=FALSE}
+# Optimal visit order within each zone (nearest-neighbour TSP)
+plan <- surveyzones_sequence(plan, distances, method = "nn")
+
+# Visit order between zones within each district
+plan <- surveyzones_sequence_zones(plan, distances)
+
+# Export to Parquet for handoff to field coordinators
+surveyzones_export_plan(plan, path = "output/rj_zones")
+```
+
+For production surveys consider:
+
+- **OSRM road distances** (`surveyzones_engine_osrm()`) instead of haversine —
+  especially important in cities with rivers, hills, or limited road access;
+- **Parameter sweeps** (`surveyzones_sweep()`) to explore the trade-off between
+  number of zones and compactness before committing to a design.
+
+---
+
+## Sumário em Português
+
+> *Texto no estilo de post para o LinkedIn.*
+
+---
+
+**Como a pesquisa chega até sua porta — e o que há de matemática por trás disso**
+
+Quando um entrevistador do IBGE bate na sua porta, parece simples. Mas planejar
+quem vai a qual endereço, em qual ordem, saindo de qual agência, é um problema
+logístico de verdade.
+
+Em 2024
+[publiquei sobre o **orce**](https://www.linkedin.com/posts/eduardo-leoni-5937875_orce-otimiza%C3%A7%C3%A3o-de-redes-de-coleta-estat%C3%ADstica-activity-7260243557335109632-6v93),
+pacote que otimiza a alocação de setores censitários às agências do IBGE — com
+potencial de redução de custos de até 29%. Mas a alocação entre setores e
+agências resolve apenas metade do problema. Antes disso: *como agrupar os
+setores em zonas de trabalho para que as equipes se desloquem o mínimo
+possível?*
+
+É aí que entra o **surveyzones**.
+
+---
+
+**O que este artigo mostra**
+
+Aplicamos o pipeline completo ao Rio de Janeiro, usando dados abertos do Censo
+2022 (`r nrow(sampled_tracts_0)` setores, `r n_distinct(sampled_tracts_0$subdistrict)` subdistritos):
+
+1. Amostra estratificada por subdistrito
+2. Endereços via CNEFE → ponto representativo por setor (densidade de kernel)
+3. Zonas via p-mediana capacitada (MILP, solver HiGHS) — máximo 5 setores e 3 km por zona
+
+---
+
+**O detalhe que faz diferença: favelas**
+
+Setores em *aglomerados subnormais* têm acesso e protocolos distintos. Misturá-los
+com setores regulares na mesma zona é conveniente para o algoritmo, mas inviável
+na prática.
+
+O **surveyzones** resolve isso com `enforce_partition = TRUE`: cada zona passa a
+ser homogênea. O custo? Um modesto aumento no número de zonas — veja a comparação:
+
+```{r sumario-tabela, echo=FALSE}
+comp <- dplyr::bind_rows(
+  dplyr::mutate(plan_no_partition$assignments, cenario = "Sem particao"),
+  dplyr::mutate(plan_partition$assignments,    cenario = "Com particao")
+) |>
+  dplyr::group_by(cenario) |>
+  dplyr::summarise(
+    `Zonas`             = dplyr::n_distinct(zone_id),
+    `Setores alocados`  = dplyr::n(),
+    `Dist. media (km)`  = round(mean(distance_to_center, na.rm = TRUE), 2),
+    `Dist. maxima (km)` = round(max(distance_to_center,  na.rm = TRUE), 2),
+    .groups = "drop"
+  ) |>
+  dplyr::rename(Cenario = cenario)
+
+knitr::kable(comp, align = "lrrrr")
+```
+
+```{r sumario-stats-no-partition, echo=FALSE, fig.width=8, fig.height=4, out.width="100%"}
+surveyzones_plot_statistics(plan_no_partition, type = "all")
+```
+*Distribuição das zonas — sem partição*
+
+```{r sumario-stats-partition, echo=FALSE, fig.width=8, fig.height=4, out.width="100%"}
+surveyzones_plot_statistics(plan_partition, type = "all")
+```
+*Distribuição das zonas — com partição*
+
+```{r sumario-map-no-partition, echo=FALSE, eval=knitr::pandoc_to() == "html"}
+make_map(plan_no_partition)
+```
+*Mapa sem partição — setores de favela (laranja) podem aparecer na mesma zona
+que setores regulares (verde)*
+
+```{r sumario-map-partition, echo=FALSE, eval=knitr::pandoc_to() == "html"}
+make_map(plan_partition)
+```
+*Mapa com partição — cada zona é homogênea*
+
+---
+
+**O pipeline completo**
+
+> `surveyzones` agrupa setores em zonas compactas →
+> `orce` aloca as zonas às agências do IBGE
+
+Aplicação imediata: planejamento da coleta de biomarcadores da **PNS 2026**.
+Mas a lógica é genérica para qualquer pesquisa domiciliar com coleta presencial.
+
+Ambos os pacotes são open source, em R.
+
+`#EstatísticaPública` `#PesquisaOperacional` `#IBGE` `#PNS2026` `#R`

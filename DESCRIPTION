@@ -15,10 +15,12 @@ Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
 Imports:
+    cachem,
     cli,
     dplyr,
     ggplot2,
     igraph,
+    memoise,
     ompr,
     ompr.roi,
     purrr,
@@ -28,7 +30,8 @@ Imports:
     sf,
     tibble,
     tidyr,
-    TSP
+    TSP,
+    tools
 Suggests:
     arrow,
     DBI,
@@ -43,6 +46,8 @@ Suggests:
     ROI.plugin.cbc,
     ROI.plugin.glpk,
     ROI.plugin.highs,
+    spatstat.explore,
+    spatstat.geom,
     testthat (>= 3.0.0),
     withr
 Config/testthat/edition: 3
