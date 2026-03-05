@@ -323,8 +323,8 @@ For production surveys consider:
 
 - **OSRM road distances** (`surveyzones_engine_osrm()`) instead of haversine —
   especially important in cities with rivers, hills, or limited road access;
-- **Parameter sweeps** (`surveyzones_sweep()`) to explore the trade-off between
-  number of zones and compactness before committing to a design.
+- **Plan comparison** (`surveyzones_compare()`) to evaluate trade-offs between
+  different zone designs before committing.
 
 ---
 
