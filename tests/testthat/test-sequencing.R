@@ -69,3 +69,174 @@ test_that("method parameter is passed through", {
   expect_equal(sort(result), c("A", "B", "C"))
   expect_equal(length(result), 3)
 })
+
+test_that("MDS sequencing produces zone_score and zone_order", {
+  # 4 zones in a line: Z1--Z2--Z3--Z4
+  # Distances: adjacent = 1, skip-one = 2, skip-two = 3
+  zones_tbl <- tibble::tibble(
+    zone_id = paste0("Z", 1:4),
+    partition_id = "P1",
+    center_tract_id = paste0("C", 1:4),
+    total_workload = 1,
+    diameter = 0,
+    n_tracts = 1L
+  )
+
+  # Complete symmetric distance matrix for 4 points on a line
+  ids <- paste0("C", 1:4)
+  pairs <- tidyr::expand_grid(origin_id = ids, destination_id = ids) |>
+    dplyr::filter(origin_id != destination_id) |>
+    dplyr::mutate(
+      i = as.integer(gsub("C", "", origin_id)),
+      j = as.integer(gsub("C", "", destination_id)),
+      distance = abs(i - j)
+    ) |>
+    dplyr::select(origin_id, destination_id, distance)
+
+  plan <- structure(
+    list(
+      zones = zones_tbl,
+      assignments = tibble::tibble(
+        tract_id = paste0("C", 1:4),
+        zone_id = paste0("Z", 1:4),
+        partition_id = "P1"
+      ),
+      zone_sequence = NULL,
+      sequence = NULL,
+      parameters = list(),
+      diagnostics = list()
+    ),
+    class = "surveyzones_plan"
+  )
+
+  plan <- surveyzones_sequence_zones(plan, pairs, method = "mds")
+
+  expect_false(is.null(plan$zone_sequence))
+  expect_true("zone_score" %in% names(plan$zone_sequence))
+  expect_true("zone_order" %in% names(plan$zone_sequence))
+  expect_equal(nrow(plan$zone_sequence), 4)
+
+  # zone_order should be 1:4
+  expect_equal(sort(plan$zone_sequence$zone_order), 1:4)
+
+  # MDS on a line should recover the linear order (up to reflection)
+  scores <- plan$zone_sequence |>
+    dplyr::arrange(zone_id) |>
+    dplyr::pull(zone_score)
+
+  # Consecutive scores should be monotonic (either all increasing or all decreasing)
+  diffs <- diff(scores)
+  expect_true(all(diffs > 0) || all(diffs < 0))
+})
+
+test_that("MDS sequencing handles single-zone partition", {
+  zones_tbl <- tibble::tibble(
+    zone_id = "Z1",
+    partition_id = "P1",
+    center_tract_id = "C1",
+    total_workload = 1,
+    diameter = 0,
+    n_tracts = 1L
+  )
+
+  plan <- structure(
+    list(
+      zones = zones_tbl,
+      assignments = tibble::tibble(
+        tract_id = "C1", zone_id = "Z1", partition_id = "P1"
+      ),
+      zone_sequence = NULL,
+      sequence = NULL,
+      parameters = list(),
+      diagnostics = list()
+    ),
+    class = "surveyzones_plan"
+  )
+
+  pairs <- tibble::tibble(
+    origin_id = character(0),
+    destination_id = character(0),
+    distance = numeric(0)
+  )
+
+  plan <- surveyzones_sequence_zones(plan, pairs, method = "mds")
+  expect_equal(plan$zone_sequence$zone_score, 0)
+  expect_equal(plan$zone_sequence$zone_order, 1L)
+})
+
+test_that("MDS sequencing errors on incomplete distances", {
+  zones_tbl <- tibble::tibble(
+    zone_id = paste0("Z", 1:3),
+    partition_id = "P1",
+    center_tract_id = paste0("C", 1:3),
+    total_workload = 1,
+    diameter = 0,
+    n_tracts = 1L
+  )
+
+  # Only C1-C2 pair, missing C1-C3 and C2-C3
+  pairs <- tibble::tibble(
+    origin_id = c("C1", "C2"),
+    destination_id = c("C2", "C1"),
+    distance = c(1, 1)
+  )
+
+  plan <- structure(
+    list(
+      zones = zones_tbl,
+      assignments = tibble::tibble(
+        tract_id = paste0("C", 1:3),
+        zone_id = paste0("Z", 1:3),
+        partition_id = "P1"
+      ),
+      zone_sequence = NULL,
+      sequence = NULL,
+      parameters = list(),
+      diagnostics = list()
+    ),
+    class = "surveyzones_plan"
+  )
+
+  expect_error(
+    surveyzones_sequence_zones(plan, pairs, method = "mds"),
+    "missing"
+  )
+})
+
+test_that("TSP sequencing returns NA zone_score", {
+  zones_tbl <- tibble::tibble(
+    zone_id = paste0("Z", 1:3),
+    partition_id = "P1",
+    center_tract_id = paste0("C", 1:3),
+    total_workload = 1,
+    diameter = 0,
+    n_tracts = 1L
+  )
+
+  ids <- paste0("C", 1:3)
+  pairs <- tidyr::expand_grid(origin_id = ids, destination_id = ids) |>
+    dplyr::filter(origin_id != destination_id) |>
+    dplyr::mutate(distance = 1) |>
+    dplyr::select(origin_id, destination_id, distance)
+
+  plan <- structure(
+    list(
+      zones = zones_tbl,
+      assignments = tibble::tibble(
+        tract_id = paste0("C", 1:3),
+        zone_id = paste0("Z", 1:3),
+        partition_id = "P1"
+      ),
+      zone_sequence = NULL,
+      sequence = NULL,
+      parameters = list(),
+      diagnostics = list()
+    ),
+    class = "surveyzones_plan"
+  )
+
+  plan <- surveyzones_sequence_zones(plan, pairs, method = "nn")
+
+  expect_true("zone_score" %in% names(plan$zone_sequence))
+  expect_true(all(is.na(plan$zone_sequence$zone_score)))
+})

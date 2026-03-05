@@ -43,6 +43,49 @@ surveyzones_sequence <- function(plan, sparse_distances,
 }
 
 
+#' MDS-Based Zone Sequencing for a Single Partition
+#'
+#' Embeds zone centers into 1D using classical multidimensional scaling.
+#'
+#' @param center_ids Character vector of zone center tract IDs.
+#' @param sparse_distances Sparse distance tibble.
+#'
+#' @return Named numeric vector of 1D MDS coordinates (names = center_ids).
+#' @keywords internal
+.mds_sequence_zone <- function(center_ids, sparse_distances) {
+  n <- length(center_ids)
+  if (n <= 1) return(stats::setNames(0, center_ids))
+
+  # Build complete symmetric distance matrix
+  mat <- matrix(0, nrow = n, ncol = n, dimnames = list(center_ids, center_ids))
+
+  dt <- sparse_distances |>
+    dplyr::filter(origin_id %in% center_ids, destination_id %in% center_ids,
+                  origin_id != destination_id)
+
+  # Check completeness: need n*(n-1) directed pairs
+  expected_pairs <- n * (n - 1)
+  unique_pairs <- nrow(dplyr::distinct(dt, origin_id, destination_id))
+  if (unique_pairs < expected_pairs) {
+    n_missing <- expected_pairs - unique_pairs
+    cli::cli_abort(c(
+      "Distance matrix for zone centers is incomplete ({n_missing} missing pair{?s}).",
+      "i" = "Use {.fun surveyzones_complete_distances} to fill missing pairs before sequencing."
+    ))
+  }
+
+  # Fill matrix, symmetrise by averaging d(a,b) and d(b,a)
+  if (nrow(dt) > 0) {
+    mat[cbind(as.character(dt$origin_id), as.character(dt$destination_id))] <- dt$distance
+  }
+  mat <- (mat + t(mat)) / 2
+
+  # Classical MDS into 1D
+  coords <- stats::cmdscale(stats::as.dist(mat), k = 1)
+  stats::setNames(as.numeric(coords), center_ids)
+}
+
+
 #' Sequence Zones Within Each Partition
 #'
 #' Given a solved plan, finds an optimal visit order for the zones within each
@@ -53,13 +96,16 @@ surveyzones_sequence <- function(plan, sparse_distances,
 #' @param plan A `surveyzones_plan` object.
 #' @param sparse_distances Sparse distance table (as returned by
 #'   [surveyzones_compute_sparse_distances()]).
-#' @param method Character scalar. TSP solving method passed to
-#'   [TSP::solve_TSP()]. Default `"nn"` (nearest neighbour).
-#'   Other useful options: `"repetitive_nn"`, `"nearest_insertion"`,
-#'   `"cheapest_insertion"`, `"two_opt"`.
+#' @param method Character scalar.  Sequencing method. `"mds"` uses classical
+#'   multidimensional scaling to embed zone centers into 1D — zones with
+#'   nearby scores are nearby in space.  All other values (e.g., `"nn"`,
+#'   `"repetitive_nn"`, `"nearest_insertion"`) are passed to
+#'   [TSP::solve_TSP()].  Default `"nn"`.
 #'
 #' @return The same `plan` with `plan$zone_sequence` populated — a tibble
-#'   with columns `partition_id`, `zone_id`, `zone_order`.
+#'   with columns `partition_id`, `zone_id`, `zone_order`, `zone_score`.
+#'   `zone_score` contains the raw MDS coordinate when `method = "mds"`,
+#'   or `NA` for TSP methods.
 #'
 #' @export
 surveyzones_sequence_zones <- function(plan, sparse_distances, method = "nn") {
@@ -67,28 +113,58 @@ surveyzones_sequence_zones <- function(plan, sparse_distances, method = "nn") {
     cli::cli_abort("{.arg plan} must be a {.cls surveyzones_plan} object.")
   }
 
-  plan$zone_sequence <- plan$zones |>
-    tidyr::nest(data = -partition_id) |>
-    dplyr::mutate(
-      ordered = purrr::map(
-        data,
-        \(z) surveyzones_sequence_zone(
-          tract_ids        = z$center_tract_id,
-          sparse_distances = sparse_distances,
-          method           = method
+  is_mds <- identical(method, "mds")
+
+  if (is_mds) {
+    plan$zone_sequence <- plan$zones |>
+      tidyr::nest(data = -partition_id) |>
+      dplyr::mutate(
+        result = purrr::map(data, \(z) {
+          scores <- .mds_sequence_zone(
+            center_ids = z$center_tract_id,
+            sparse_distances = sparse_distances
+          )
+          tibble::tibble(
+            center_tract_id = names(scores),
+            zone_score = as.numeric(scores)
+          )
+        })
+      ) |>
+      dplyr::select(-data) |>
+      tidyr::unnest(result) |>
+      dplyr::left_join(
+        plan$zones |> dplyr::select(zone_id, center_tract_id),
+        by = "center_tract_id"
+      ) |>
+      dplyr::group_by(partition_id) |>
+      dplyr::mutate(zone_order = rank(zone_score, ties.method = "first")) |>
+      dplyr::ungroup() |>
+      dplyr::select(partition_id, zone_id, zone_order, zone_score)
+  } else {
+    plan$zone_sequence <- plan$zones |>
+      tidyr::nest(data = -partition_id) |>
+      dplyr::mutate(
+        ordered = purrr::map(
+          data,
+          \(z) surveyzones_sequence_zone(
+            tract_ids        = z$center_tract_id,
+            sparse_distances = sparse_distances,
+            method           = method
+          )
         )
-      )
-    ) |>
-    dplyr::select(-data) |>
-    tidyr::unnest_longer(ordered, values_to = "center_tract_id") |>
-    dplyr::left_join(
-      plan$zones |> dplyr::select(zone_id, center_tract_id),
-      by = "center_tract_id"
-    ) |>
-    dplyr::group_by(partition_id) |>
-    dplyr::mutate(zone_order = dplyr::row_number()) |>
-    dplyr::ungroup() |>
-    dplyr::select(partition_id, zone_id, zone_order)
+      ) |>
+      dplyr::select(-data) |>
+      tidyr::unnest_longer(ordered, values_to = "center_tract_id") |>
+      dplyr::left_join(
+        plan$zones |> dplyr::select(zone_id, center_tract_id),
+        by = "center_tract_id"
+      ) |>
+      dplyr::group_by(partition_id) |>
+      dplyr::mutate(zone_order = dplyr::row_number()) |>
+      dplyr::ungroup() |>
+      dplyr::mutate(zone_score = NA_real_) |>
+      dplyr::select(partition_id, zone_id, zone_order, zone_score)
+  }
 
   plan
 }
