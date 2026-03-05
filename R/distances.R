@@ -175,3 +175,84 @@ validate_access_points <- function(access_points,
   # Remove self-pairs
   dt |> dplyr::filter(origin_id != destination_id)
 }
+
+
+#' Complete a Sparse Distance Table with Haversine Fill-In
+#'
+#' For every directed pair of tract IDs in `access_points` not already
+#' present in `sparse_distances`, computes haversine (great-circle) distance
+#' in km and converts to the distance unit using a speed parameter:
+#' `distance = haversine_km / speed_kmh * 60` (result in minutes).
+#'
+#' Existing pairs are preserved unchanged.  Use this before
+#' [surveyzones_sequence_zones()] with `method = "mds"` when the
+#' sparse distance table may be incomplete.
+#'
+#' @param sparse_distances A tibble with columns `origin_id`,
+#'   `destination_id`, and `distance`.
+#' @param access_points An sf object with POINT geometries and a
+#'   `tract_id` column.
+#' @param speed_kmh Numeric scalar.  Assumed travel speed in km/h for
+#'   converting haversine distance to time.  Default `0.1` (intentionally
+#'   harsh — missing pairs likely represent real barriers).
+#'
+#' @return A tibble with the same schema as `sparse_distances`, with
+#'   missing pairs filled in.  Self-pairs are excluded.
+#'
+#' @export
+surveyzones_complete_distances <- function(sparse_distances, access_points,
+                                           speed_kmh = 0.1) {
+  validate_access_points(access_points)
+
+  if (!is.numeric(speed_kmh) || length(speed_kmh) != 1 || speed_kmh <= 0) {
+    cli::cli_abort("{.arg speed_kmh} must be a positive number.")
+  }
+
+  tract_ids <- as.character(access_points$tract_id)
+  n <- length(tract_ids)
+
+  # All directed non-self pairs
+  all_pairs <- tidyr::expand_grid(
+    origin_id = tract_ids,
+    destination_id = tract_ids
+  ) |>
+    dplyr::filter(origin_id != destination_id)
+
+  # Find which pairs are missing
+  existing <- sparse_distances |>
+    dplyr::select(origin_id, destination_id) |>
+    dplyr::mutate(
+      origin_id = as.character(origin_id),
+      destination_id = as.character(destination_id)
+    )
+
+  missing <- dplyr::anti_join(all_pairs, existing,
+                               by = c("origin_id", "destination_id"))
+
+  if (nrow(missing) == 0) {
+    return(sparse_distances)
+  }
+
+  # Compute haversine for missing pairs
+  idx_o <- match(missing$origin_id, tract_ids)
+  idx_d <- match(missing$destination_id, tract_ids)
+
+  haversine_km <- sf::st_distance(
+    access_points[idx_o, ],
+    access_points[idx_d, ],
+    by_element = TRUE
+  )
+  haversine_km <- as.numeric(haversine_km) / 1000
+
+  filled <- tibble::tibble(
+    origin_id = missing$origin_id,
+    destination_id = missing$destination_id,
+    distance = haversine_km / speed_kmh * 60
+  )
+
+  cli::cli_alert_info(
+    "Filled {nrow(filled)} missing distance pair{?s} using haversine (speed = {speed_kmh} km/h)."
+  )
+
+  dplyr::bind_rows(sparse_distances, filled)
+}

@@ -104,3 +104,84 @@ test_that("validate_access_points rejects duplicate tract_ids", {
     "must be unique"
   )
 })
+
+test_that("complete_distances fills missing pairs with haversine", {
+  pts <- sf::st_as_sf(
+    data.frame(
+      tract_id = c("A", "B", "C"),
+      lon = c(-38.50, -38.51, -38.52),
+      lat = c(-13.00, -13.01, -13.02)
+    ),
+    coords = c("lon", "lat"), crs = 4326
+  )
+
+  # Only A-B pair exists; A-C and B-C are missing
+  sparse <- tibble::tibble(
+    origin_id = c("A", "B"),
+    destination_id = c("B", "A"),
+    distance = c(10, 10)
+  )
+
+  result <- surveyzones_complete_distances(sparse, pts, speed_kmh = 0.1)
+
+  # Original pairs preserved
+  ab <- result |> dplyr::filter(origin_id == "A", destination_id == "B")
+  expect_equal(ab$distance, 10)
+
+  # Missing pairs filled (all 6 directed pairs for 3 points should exist)
+  expect_equal(nrow(result), 6)
+
+  # Filled pairs have positive distance
+  ac <- result |> dplyr::filter(origin_id == "A", destination_id == "C")
+  expect_true(ac$distance > 0)
+})
+
+test_that("complete_distances preserves all existing pairs", {
+  pts <- sf::st_as_sf(
+    data.frame(
+      tract_id = c("A", "B"),
+      lon = c(-38.50, -38.51),
+      lat = c(-13.00, -13.01)
+    ),
+    coords = c("lon", "lat"), crs = 4326
+  )
+
+  # Already complete
+  sparse <- tibble::tibble(
+    origin_id = c("A", "B"),
+    destination_id = c("B", "A"),
+    distance = c(99, 99)
+  )
+
+  result <- surveyzones_complete_distances(sparse, pts, speed_kmh = 0.1)
+
+  # No new rows added, original values preserved
+  expect_equal(nrow(result), 2)
+  expect_true(all(result$distance == 99))
+})
+
+test_that("complete_distances respects speed_kmh parameter", {
+  pts <- sf::st_as_sf(
+    data.frame(
+      tract_id = c("A", "B"),
+      lon = c(-38.50, -38.51),
+      lat = c(-13.00, -13.01)
+    ),
+    coords = c("lon", "lat"), crs = 4326
+  )
+
+  sparse <- tibble::tibble(
+    origin_id = character(0),
+    destination_id = character(0),
+    distance = numeric(0)
+  )
+
+  slow <- surveyzones_complete_distances(sparse, pts, speed_kmh = 0.1)
+  fast <- surveyzones_complete_distances(sparse, pts, speed_kmh = 1.0)
+
+  # Slower speed -> larger distance values
+  slow_d <- slow$distance[slow$origin_id == "A" & slow$destination_id == "B"]
+  fast_d <- fast$distance[fast$origin_id == "A" & fast$destination_id == "B"]
+  expect_true(slow_d > fast_d)
+  expect_equal(slow_d / fast_d, 10, tolerance = 0.01)
+})
