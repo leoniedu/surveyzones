@@ -27,10 +27,10 @@ Imports:
     readr,
     rlang,
     ROI,
+    seriation,
     sf,
     tibble,
     tidyr,
-    TSP,
     tools
 Suggests:
     arrow,

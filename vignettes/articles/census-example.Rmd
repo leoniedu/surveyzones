@@ -37,7 +37,7 @@ the city of Rio de Janeiro as an example:
    [cnefetools](https://github.com/pedreirajr/cnefetools)
 5. Compute one **representative access point** per tract using kernel density
    estimation on geocoded addresses
-6. Build zones and evaluate
+6. Build zones, sequence them spatially, and evaluate
 
 ## Setup
 
@@ -197,7 +197,8 @@ plan_no_partition <- surveyzones_build_zones(
   max_workload_per_zone = 5L,
   enforce_partition     = FALSE,
   solver                = "highs",
-  strategy              = "auto"
+  strategy              = "auto",
+  access_points         = access_pts
 )
 
 plan_partition <- surveyzones_build_zones(
@@ -207,14 +208,32 @@ plan_partition <- surveyzones_build_zones(
   max_workload_per_zone = 5L,
   enforce_partition     = TRUE, # comunidade / regular solved separately
   solver                = "highs",
-  strategy              = "auto"
+  strategy              = "auto",
+  access_points         = access_pts
 )
 
 print(plan_no_partition)
 print(plan_partition)
 ```
 
-## Step 6 — Evaluate
+## Step 6 — Sequence zones and tracts
+
+Once zones are built, we sequence them spatially: first the **visit order
+between zones** (which zone to visit first, second, etc.), then the **visit
+order of tracts within each zone**.
+
+```{r sequence}
+# Zone visit order via flood-fill + TSP on min pairwise tract distances
+# (access_points for haversine fill-in are pulled from the plan)
+plan_partition <- surveyzones_sequence_zones(plan_partition, distances)
+plan_no_partition <- surveyzones_sequence_zones(plan_no_partition, distances)
+
+# Tract visit order within each zone
+plan_partition <- surveyzones_sequence(plan_partition, distances)
+plan_no_partition <- surveyzones_sequence(plan_no_partition, distances)
+```
+
+## Step 7 — Evaluate
 
 ### Zone statistics
 
@@ -232,7 +251,8 @@ surveyzones_plot_statistics(plan_partition, type = "all")
 
 Tracts are coloured by `partition_id` (*comunidade* vs *regular*). Without
 partitioning, zone hulls may contain mixed colours; with partitioning, each
-hull is monochromatic.
+hull is monochromatic. Numbered labels show the **zone visit order** from
+SPIN_NH seriation; dashed white lines connect consecutive zones.
 
 ```{r map-helper}
 color_by <- function(x, palette = "Set2", seed = 42) {
@@ -256,7 +276,7 @@ make_map <- function(plan) {
       .groups  = "drop"
     )
 
-  mapboxgl(bounds = pts, style = mapbox_style("satellite-streets")) |>
+  m <- mapboxgl(bounds = pts, style = mapbox_style("satellite-streets")) |>
     add_fill_layer(
       id                 = "hulls",
       source             = hulls,
@@ -273,6 +293,54 @@ make_map <- function(plan) {
       circle_opacity = 0.9,
       tooltip        = "tract_id"
     )
+
+  # Add zone sequence lines and labels if available
+  if (!is.null(plan$zone_sequence)) {
+    # Build zone center points with sequence order
+    centers <- plan$zones |>
+      left_join(plan$zone_sequence, by = c("zone_id", "partition_id")) |>
+      left_join(
+        access_pts |> select(tract_id, geometry),
+        by = c("center_tract_id" = "tract_id")
+      ) |>
+      st_as_sf() |>
+      st_transform(5880L) |>
+      mutate(label = as.character(zone_order))
+
+    # Build lines connecting consecutive zones within each partition
+    seq_lines <- centers |>
+      arrange(partition_id, zone_order) |>
+      group_by(partition_id) |>
+      filter(n() > 1) |>
+      summarise(geometry = st_cast(st_combine(geometry), "LINESTRING"),
+                .groups = "drop")
+
+    if (nrow(seq_lines) > 0) {
+      m <- m |>
+        add_line_layer(
+          id         = "zone-seq-lines",
+          source     = seq_lines,
+          line_color = "white",
+          line_width = 2,
+          line_dasharray = c(4, 2),
+          line_opacity = 0.8
+        )
+    }
+
+    m <- m |>
+      add_symbol_layer(
+        id                 = "zone-seq-labels",
+        source             = centers,
+        text_field         = get_column("label"),
+        text_size          = 14,
+        text_color         = "white",
+        text_halo_color    = "black",
+        text_halo_width    = 1.5,
+        text_allow_overlap = TRUE
+      )
+  }
+
+  m
 }
 ```
 
@@ -304,27 +372,26 @@ invisible(webshot2::webshot(tmp, file = "map_partition.png",
 knitr::include_graphics("map_partition.png")
 ```
 
-## Next steps
-
-Once you have a plan, sequence visits within and between zones:
-
-```{r sequence, eval=FALSE}
-# Optimal visit order within each zone (nearest-neighbour TSP)
-plan <- surveyzones_sequence(plan, distances, method = "nn")
-
-# Visit order between zones within each district
-plan <- surveyzones_sequence_zones(plan, distances)
-
+```{r export, eval=FALSE}
 # Export to Parquet for handoff to field coordinators
-surveyzones_export_plan(plan, path = "output/rj_zones")
+surveyzones_export_plan(plan_partition, path = "output/rj_zones")
+```
+
+### Plan comparison
+
+`surveyzones_compare()` gives a quick summary across plans:
+
+```{r compare}
+surveyzones_compare(list(
+  no_partition = plan_no_partition,
+  partition    = plan_partition
+))|>t()
 ```
 
 For production surveys consider:
 
 - **OSRM road distances** (`surveyzones_engine_osrm()`) instead of haversine —
-  especially important in cities with rivers, hills, or limited road access;
-- **Plan comparison** (`surveyzones_compare()`) to evaluate trade-offs between
-  different zone designs before committing.
+  especially important in cities with rivers, hills, or limited road access.
 
 ---
 

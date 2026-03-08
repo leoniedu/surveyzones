@@ -4,7 +4,15 @@
 \alias{surveyzones_sequence_zones}
 \title{Sequence Zones Within Each Partition}
 \usage{
-surveyzones_sequence_zones(plan, sparse_distances, method = "nn")
+surveyzones_sequence_zones(
+  plan,
+  sparse_distances,
+  access_points = NULL,
+  speed_kmh = 0.1,
+  complete_distances = TRUE,
+  threshold = 10,
+  by_partition = TRUE
+)
 }
 \arguments{
 \item{plan}{A \code{surveyzones_plan} object.}
@@ -12,18 +20,37 @@ surveyzones_sequence_zones(plan, sparse_distances, method = "nn")
 \item{sparse_distances}{Sparse distance table (as returned by
 \code{\link[=surveyzones_compute_sparse_distances]{surveyzones_compute_sparse_distances()}}).}
 
-\item{method}{Character scalar. TSP solving method passed to
-\code{\link[TSP:solve_TSP]{TSP::solve_TSP()}}. Default \code{"nn"} (nearest neighbour).
-Other useful options: \code{"repetitive_nn"}, \code{"nearest_insertion"},
-\code{"cheapest_insertion"}, \code{"two_opt"}.}
+\item{access_points}{An sf object with POINT geometries and a
+\code{tract_id} column.  Used to fill missing pairwise distances via
+haversine (\code{\link[=surveyzones_complete_distances]{surveyzones_complete_distances()}}) so that every
+cross-zone tract pair has a distance.
+Defaults to \code{plan$access_points} when \code{NULL}.  Required when
+\code{complete_distances = TRUE}.}
+
+\item{speed_kmh}{Numeric scalar.  Assumed travel speed for haversine
+fill-in (km/h).  Default \code{0.1} — intentionally harsh because missing
+pairs likely represent real barriers (rivers, mountains).}
+
+\item{complete_distances}{Logical scalar.  When \code{TRUE} (default),
+missing pairwise distances are filled using haversine via
+\code{\link[=surveyzones_complete_distances]{surveyzones_complete_distances()}}.  Set to \code{FALSE} to skip
+imputation (e.g., when distances are already complete).}
+
+\item{threshold}{Numeric scalar.  Maximum distance (in the same units as
+\code{sparse_distances}, typically minutes) for two zones to be grouped
+together.  Default \code{10}.}
+
+\item{by_partition}{Logical scalar.  When \code{TRUE} (default), zones are
+sequenced independently within each partition.  When \code{FALSE}, all zones
+are sequenced together ignoring partition boundaries.}
 }
 \value{
 The same \code{plan} with \code{plan$zone_sequence} populated — a tibble
 with columns \code{partition_id}, \code{zone_id}, \code{zone_order}.
 }
 \description{
-Given a solved plan, finds an optimal visit order for the zones within each
-partition by solving an ATSP over zone centers. Structurally identical to
-\code{\link[=surveyzones_sequence]{surveyzones_sequence()}} but operates at the zone level rather than the
-tract level.
+Given a solved plan, finds a spatial ordering for the zones within each
+partition using a flood-fill + TSP approach.  Zones within \code{threshold}
+distance of each other are grouped together, then groups and zones within
+groups are ordered via TSP seriation on minimum pairwise tract distances.
 }

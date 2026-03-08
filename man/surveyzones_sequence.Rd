@@ -4,7 +4,7 @@
 \alias{surveyzones_sequence}
 \title{Sequence All Zones in a Plan}
 \usage{
-surveyzones_sequence(plan, sparse_distances, method = "nn")
+surveyzones_sequence(plan, sparse_distances, method = "TSP", control = NULL)
 }
 \arguments{
 \item{plan}{A \code{surveyzones_plan} object.}
@@ -12,15 +12,19 @@ surveyzones_sequence(plan, sparse_distances, method = "nn")
 \item{sparse_distances}{Sparse distance table (as returned by
 \code{\link[=surveyzones_compute_sparse_distances]{surveyzones_compute_sparse_distances()}}).}
 
-\item{method}{Character scalar.  TSP solving method passed to
-\code{\link[TSP:solve_TSP]{TSP::solve_TSP()}}.  Default \code{"nn"} (nearest neighbour).
-Other useful options: \code{"repetitive_nn"}, \code{"nearest_insertion"},
-\code{"cheapest_insertion"}, \code{"two_opt"}.}
+\item{method}{Character scalar passed to \code{\link[seriation:seriate]{seriation::seriate()}}
+(e.g., \code{"TSP"}, \code{"SPIN_NH"}, \code{"Spectral"}, \code{"OLO"}).
+Default \code{"TSP"}.}
+
+\item{control}{Named list of method-specific parameters passed to
+\code{\link[seriation:seriate]{seriation::seriate()}}.  For example,
+\code{control = list(sigma = c(10, 7, 5, 3), step = 10)} for \code{"SPIN_NH"}.
+Default \code{NULL}.}
 }
 \value{
 The same \code{plan} with \code{plan$sequence} populated — a tibble
 with columns \code{zone_id}, \code{tract_id}, \code{visit_order}.
 }
 \description{
-Computes a visit order for every zone using a TSP solver.
+Computes a visit order for every zone's tracts.
 }
