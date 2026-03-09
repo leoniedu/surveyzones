@@ -13,9 +13,13 @@
 #'   (e.g., `"TSP"`, `"SPIN_NH"`, `"Spectral"`, `"OLO"`).
 #'   Default `"TSP"`.
 #' @param control Named list of method-specific parameters passed to
-#'   [seriation::seriate()].  For example,
-#'   `control = list(sigma = c(10, 7, 5, 3), step = 10)` for `"SPIN_NH"`.
-#'   Default `NULL`.
+#'   [seriation::seriate()] (and through to [TSP::solve_TSP()] when
+#'   `method = "TSP"`).  Default `list(method = "nn", rep = 20)` —
+#'   nearest-neighbour from 20 random starts, keeping the best tour.
+#'   NN keeps every consecutive pair close (ideal for sliding-window
+#'   fieldwork).  Use `list(method = "2-opt")` or `NULL` to revert to
+#'   the default TSP heuristic.  Note: when `method` is not `"TSP"`,
+#'   these TSP-specific control keys are silently ignored by seriation.
 #' @param access_points An sf object with POINT geometries and a
 #'   `tract_id` column.  Used to fill missing pairwise distances via
 #'   haversine ([surveyzones_complete_distances()]) so that every
@@ -46,7 +50,7 @@ surveyzones_sequence <- function(
   plan,
   sparse_distances,
   method = "TSP",
-  control = NULL,
+  control = list(method = "nn", rep = 20),
   access_points = NULL,
   speed_kmh = 0.1,
   complete_distances = TRUE,
@@ -72,8 +76,33 @@ surveyzones_sequence <- function(
     )
   }
 
-  # ── Step 1: Zone sequencing ────────────────────────────────────────────────
+  plan$zone_sequence <- .sequence_zones(
+    plan, sparse_distances, control, threshold, by_partition
+  )
 
+  plan$sequence <- .sequence_tracts_with_orientation(
+    plan, sparse_distances, method, control
+  )
+
+  plan
+}
+
+
+#' Sequence Zones Within Partitions
+#'
+#' TSP-seriates zones using min-pairwise tract distances, then splits
+#' at gaps exceeding `threshold`.
+#'
+#' @param plan A `surveyzones_plan` object.
+#' @param sparse_distances Sparse distance tibble.
+#' @param control Control list passed to [seriation::seriate()].
+#' @param threshold Gap threshold for group splitting.
+#' @param by_partition Whether to sequence within partitions.
+#'
+#' @return Tibble with `partition_id`, `zone_id`, `zone_order`, `group_id`.
+#' @keywords internal
+.sequence_zones <- function(plan, sparse_distances, control, threshold,
+                            by_partition) {
   group_col <- if (by_partition) "partition_id" else ".group"
   zones <- plan$zones
   if (!by_partition) {
@@ -83,7 +112,7 @@ surveyzones_sequence <- function(
   zone_lookup <- plan$zones |>
     dplyr::select("zone_id", "partition_id")
 
-  plan$zone_sequence <- zones |>
+  result <- zones |>
     tidyr::nest(data = -dplyr::all_of(group_col)) |>
     dplyr::mutate(
       ordered = purrr::map(data, \(z) {
@@ -93,20 +122,17 @@ surveyzones_sequence <- function(
           return(tibble::tibble(zone_id = zone_ids, group_id = 1L))
         }
 
-        # Build min-pairwise zone distance matrix
         mat <- .build_zone_dist_matrix(
           zone_ids, plan$assignments, sparse_distances
         )
 
-        # TSP-seriate directly on the matrix (no sparse round-trip)
-        o <- seriation::seriate(stats::as.dist(mat), method = "TSP")
+        o <- .seriate_quietly(stats::as.dist(mat), method = "TSP",
+                              control = control)
         ordered_ids <- zone_ids[seriation::get_order(o)]
 
-        # Split at gaps > threshold
-        consecutive_dists <- vapply(
+        consecutive_dists <- purrr::map_dbl(
           seq_len(n - 1),
-          \(i) mat[ordered_ids[i], ordered_ids[i + 1]],
-          numeric(1)
+          \(i) mat[ordered_ids[i], ordered_ids[i + 1]]
         )
         group_id <- c(1L, cumsum(consecutive_dists > threshold) + 1L)
 
@@ -115,21 +141,39 @@ surveyzones_sequence <- function(
     ) |>
     dplyr::select(-data) |>
     tidyr::unnest(ordered) |>
-    dplyr::group_by(dplyr::across(dplyr::all_of(group_col))) |>
-    dplyr::mutate(zone_order = dplyr::row_number()) |>
-    dplyr::ungroup()
+    dplyr::mutate(
+      zone_order = dplyr::row_number(),
+      .by = dplyr::all_of(group_col)
+    )
 
   if (!by_partition) {
-    plan$zone_sequence <- plan$zone_sequence |>
-      dplyr::left_join(zone_lookup, by = "zone_id") |>
+    result <- result |>
+      dplyr::left_join(zone_lookup, by = dplyr::join_by(zone_id)) |>
       dplyr::select("partition_id", "zone_id", "zone_order", "group_id")
   } else {
-    plan$zone_sequence <- plan$zone_sequence |>
+    result <- result |>
       dplyr::select("partition_id", "zone_id", "zone_order", "group_id")
   }
 
-  # ── Step 2: Tract sequencing with orientation ──────────────────────────────
+  result
+}
 
+
+#' Sequence and Orient Tracts Within Each Zone
+#'
+#' Walks zones in visit order, seriates tracts within each zone, and
+#' orients each zone's tract sequence so the entry tract is closest
+#' to the previous zone's exit tract.
+#'
+#' @param plan A `surveyzones_plan` with `zone_sequence` already set.
+#' @param sparse_distances Sparse distance tibble.
+#' @param method Seriation method for tracts.
+#' @param control Control list passed to [seriation::seriate()].
+#'
+#' @return Tibble with `zone_id`, `tract_id`, `visit_order`.
+#' @keywords internal
+.sequence_tracts_with_orientation <- function(plan, sparse_distances,
+                                              method, control) {
   # Build O(1) distance lookup
   dist_key <- paste(
     sparse_distances$origin_id, sparse_distances$destination_id,
@@ -154,7 +198,6 @@ surveyzones_sequence <- function(
     pid <- zs$partition_id[j]
     tract_ids <- tracts_by_zone[[zid]]
 
-    # Seriate tracts
     ordered_tracts <- surveyzones_sequence_tracts(
       tract_ids, sparse_distances, method = method, control = control
     )
@@ -181,9 +224,27 @@ surveyzones_sequence <- function(
     )
   }
 
-  plan$sequence <- dplyr::bind_rows(sequences)
+  dplyr::bind_rows(sequences)
+}
 
-  plan
+
+#' Call seriation::seriate() Suppressing Only TSP Control Warnings
+#'
+#' @param d A `dist` object.
+#' @param method Seriation method.
+#' @param control Control list.
+#'
+#' @return A seriation order object.
+#' @keywords internal
+.seriate_quietly <- function(d, method, control) {
+  withCallingHandlers(
+    seriation::seriate(d, method = method, control = control),
+    warning = function(w) {
+      if (grepl("control parameter|Unknown parameter|sequentially", conditionMessage(w))) {
+        invokeRestart("muffleWarning")
+      }
+    }
+  )
 }
 
 
@@ -196,11 +257,12 @@ surveyzones_sequence <- function(
 #' @param sparse_distances Sparse distance tibble.
 #' @param method Character scalar passed to [seriation::seriate()].
 #' @param control Named list of method-specific parameters passed to
-#'   [seriation::seriate()].
+#'   [seriation::seriate()].  Default `list(method = "nn", rep = 20)`.
 #'
 #' @return Character vector of IDs in seriation order.
 #' @keywords internal
-.seriate_1d <- function(ids, sparse_distances, method = "TSP", control = NULL) {
+.seriate_1d <- function(ids, sparse_distances, method = "TSP",
+                        control = list(method = "nn", rep = 20)) {
   n <- length(ids)
   if (n <= 1) {
     return(ids)
@@ -236,19 +298,21 @@ surveyzones_sequence <- function(
   }
   mat <- (mat + t(mat)) / 2
 
+  # Strip TSP-specific keys when using non-TSP methods
+  if (method != "TSP" && !is.null(control)) {
+    tsp_keys <- c("method", "rep", "two_opt", "start")
+    control <- control[setdiff(names(control), tsp_keys)]
+    if (length(control) == 0) control <- NULL
+  }
+
   # Apply SPIN_NH defaults:
   if (method == "SPIN_NH" && is.null(control)) {
     control <- list(sigma = 1)
   }
 
-  # Seriate
-  o <- seriation::seriate(
-    stats::as.dist(mat),
-    method = method,
-    control = control
-  )
-  perm <- seriation::get_order(o)
-  ids[perm]
+  o <- .seriate_quietly(d = stats::as.dist(mat), method = method,
+                        control = control)
+  ids[seriation::get_order(o)]
 }
 
 
@@ -315,7 +379,7 @@ surveyzones_sequence <- function(
 #'   (e.g., `"TSP"`, `"SPIN_NH"`, `"Spectral"`, `"OLO"`).
 #'   Default `"TSP"`.
 #' @param control Named list of method-specific parameters passed to
-#'   [seriation::seriate()].  Default `NULL`.
+#'   [seriation::seriate()].  Default `list(method = "nn", rep = 20)`.
 #'
 #' @return Character vector of tract_ids in visit order.
 #'
@@ -324,7 +388,7 @@ surveyzones_sequence_tracts <- function(
   tract_ids,
   sparse_distances,
   method = "TSP",
-  control = NULL
+  control = list(method = "nn", rep = 20)
 ) {
   n <- length(tract_ids)
   if (n <= 2) {

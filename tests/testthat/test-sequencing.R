@@ -72,6 +72,7 @@ test_that("TSP seriation method parameter is passed through", {
 })
 
 test_that("zone sequencing produces correct zone_order for line topology", {
+  withr::local_seed(42)
   # 4 zones in a line: Z1--Z2--Z3--Z4, all within threshold
   zones_tbl <- tibble::tibble(
     zone_id = paste0("Z", 1:4),
@@ -299,6 +300,7 @@ test_that("zone sequencing completes incomplete distances via haversine", {
 })
 
 test_that("by_partition = FALSE sequences all zones together", {
+  withr::local_seed(42)
   zones_tbl <- tibble::tibble(
     zone_id = paste0("Z", 1:4),
     partition_id = c("P1", "P1", "P2", "P2"),
@@ -437,6 +439,7 @@ test_that(".build_zone_dist_matrix has no Inf when distances are complete", {
 })
 
 test_that("sequence uses min pairwise distances, not center-to-center", {
+  withr::local_seed(42)
   # Z1 center at C1 (far left), Z2 center at C4 (far right)
   # But Z1 contains T2 (near right) and Z2 contains T3 (near left)
   # So min-pairwise(Z1,Z2) = d(T2,T3) which is small
@@ -507,6 +510,7 @@ test_that("sequence uses min pairwise distances, not center-to-center", {
 })
 
 test_that("zone sequencing groups zones by threshold (gap-based)", {
+  withr::local_seed(42)
   # 6 zones in two clusters: Z1-Z3 close together, Z4-Z6 close together
   # Clusters are far apart (distance 50)
   zones_tbl <- tibble::tibble(
@@ -579,14 +583,14 @@ test_that("zone sequencing groups zones by threshold (gap-based)", {
   expect_false(cluster1_groups == cluster2_groups)
 })
 
-test_that("tract orientation reverses when exit is closer to last tract", {
-  # Zone A: tracts T1, T2, T3 on a line (positions 0, 1, 2)
-  # Zone B: tracts T4, T5, T6 on a line (positions 10, 11, 12)
-  # Zone A exit = T3 (position 2). T4 is at 10, T6 is at 12.
-  # T3 → T4 = 8, T3 → T6 = 10: entry (T4) is closer → no reversal.
-  #
-  # Now flip Zone B positions: T4=12, T5=11, T6=10
-  # T3 → T4 = 10, T3 → T6 = 8: last (T6) is closer → should reverse.
+test_that("tract orientation orients second zone's entry toward first zone's exit", {
+  withr::local_seed(42)
+  # Two zones on a line, well-separated:
+  # ZA tracts at positions 0, 1, 2
+  # ZB tracts at positions 10, 11, 12
+  # Regardless of which zone comes first, the second zone's entry (first tract)
+  # should be closer to the first zone's exit (last tract) than the second
+  # zone's last tract.
   zones_tbl <- tibble::tibble(
     zone_id = c("ZA", "ZB"),
     partition_id = "P1",
@@ -596,8 +600,7 @@ test_that("tract orientation reverses when exit is closer to last tract", {
     n_tracts = 3L
   )
 
-  # Positions: T1=0, T2=1, T3=2, T4=12, T5=11, T6=10
-  positions <- c(T1 = 0, T2 = 1, T3 = 2, T4 = 12, T5 = 11, T6 = 10)
+  positions <- c(T1 = 0, T2 = 1, T3 = 2, T4 = 10, T5 = 11, T6 = 12)
   ids <- names(positions)
   pairs <- tidyr::expand_grid(origin_id = ids, destination_id = ids) |>
     dplyr::filter(origin_id != destination_id) |>
@@ -623,22 +626,91 @@ test_that("tract orientation reverses when exit is closer to last tract", {
     plan, pairs, threshold = 100, complete_distances = FALSE
   )
 
-  # Zone A's tracts should be in order T1-T2-T3 (or reversed)
-  za <- plan$sequence |>
-    dplyr::filter(zone_id == "ZA") |>
+  # Identify which zone is visited first and second
+  zs <- plan$zone_sequence |> dplyr::arrange(zone_order)
+  first_zone <- zs$zone_id[1]
+  second_zone <- zs$zone_id[2]
+
+  first_tracts <- plan$sequence |>
+    dplyr::filter(zone_id == first_zone) |>
+    dplyr::arrange(visit_order)
+  second_tracts <- plan$sequence |>
+    dplyr::filter(zone_id == second_zone) |>
     dplyr::arrange(visit_order)
 
-  # Zone B's tracts: TSP on {T4(12), T5(11), T6(10)} gives T4-T5-T6 or T6-T5-T4.
-  # After orientation, entry should be T6 (closest to ZA's exit at position 2):
-  # T6(10) is closer to T3(2) than T4(12) is.
-  zb <- plan$sequence |>
-    dplyr::filter(zone_id == "ZB") |>
-    dplyr::arrange(visit_order)
+  # The second zone's entry (first tract) should be closer to the first
+  # zone's exit (last tract) than the second zone's last tract
+  exit_pos <- positions[first_tracts$tract_id[nrow(first_tracts)]]
+  entry_pos <- positions[second_tracts$tract_id[1]]
+  tail_pos <- positions[second_tracts$tract_id[nrow(second_tracts)]]
 
-  # The first tract of ZB should be T6 (position 10, closer to ZA exit)
-  # regardless of which direction TSP chose
-  za_exit_pos <- positions[za$tract_id[nrow(za)]]
-  zb_first_pos <- positions[zb$tract_id[1]]
-  zb_last_pos <- positions[zb$tract_id[nrow(zb)]]
-  expect_true(abs(zb_first_pos - za_exit_pos) <= abs(zb_last_pos - za_exit_pos))
+  expect_true(abs(entry_pos - exit_pos) <= abs(tail_pos - exit_pos))
+})
+
+test_that("default NN control keeps consecutive zone pairs close", {
+  withr::local_seed(42)
+
+  # 5 zones on a line: Z1(0)--Z2(1)--Z3(2)--Z4(3)--Z5(4)
+  # NN should never skip a neighbour (unlike TSP which might for global opt)
+  zones_tbl <- tibble::tibble(
+    zone_id = paste0("Z", 1:5),
+    partition_id = "P1",
+    center_tract_id = paste0("C", 1:5),
+    total_workload = 1,
+    diameter = 0,
+    n_tracts = 1L
+  )
+
+  ids <- paste0("C", 1:5)
+  pairs <- tidyr::expand_grid(origin_id = ids, destination_id = ids) |>
+    dplyr::filter(origin_id != destination_id) |>
+    dplyr::mutate(
+      i = as.integer(gsub("C", "", origin_id)),
+      j = as.integer(gsub("C", "", destination_id)),
+      distance = abs(i - j)
+    ) |>
+    dplyr::select(origin_id, destination_id, distance)
+
+  plan <- structure(
+    list(
+      zones = zones_tbl,
+      assignments = tibble::tibble(
+        tract_id = ids,
+        zone_id = paste0("Z", 1:5),
+        partition_id = "P1"
+      ),
+      zone_sequence = NULL, sequence = NULL,
+      parameters = list(), diagnostics = list()
+    ),
+    class = "surveyzones_plan"
+  )
+
+  # Default control = list(method = "nn", rep = 20)
+  plan <- surveyzones_sequence(
+    plan, pairs, threshold = 100, complete_distances = FALSE
+  )
+
+  ordered <- plan$zone_sequence |> dplyr::arrange(zone_order)
+  zone_nums <- as.integer(gsub("Z", "", ordered$zone_id))
+
+  # Every consecutive pair should be distance 1 (adjacent on the line)
+  expect_true(all(abs(diff(zone_nums)) == 1))
+})
+
+test_that("control = NULL overrides default NN and still works", {
+  ids <- paste0("T", 1:4)
+  pairs <- tidyr::expand_grid(origin_id = ids, destination_id = ids) |>
+    dplyr::filter(origin_id != destination_id) |>
+    dplyr::mutate(
+      i = as.integer(gsub("T", "", origin_id)),
+      j = as.integer(gsub("T", "", destination_id)),
+      distance = abs(i - j)
+    ) |>
+    dplyr::select(origin_id, destination_id, distance)
+
+  # control = NULL should use seriation's default TSP heuristic
+  result <- surveyzones_sequence_tracts(ids, pairs, method = "TSP",
+                                        control = NULL)
+  expect_equal(sort(result), sort(ids))
+  expect_equal(length(result), 4)
 })
