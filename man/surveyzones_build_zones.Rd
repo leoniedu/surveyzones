@@ -19,7 +19,8 @@ surveyzones_build_zones(
   rel_tol = 0.01,
   verbose = FALSE,
   strategy = "auto",
-  use_cache = TRUE
+  use_cache = TRUE,
+  access_points = NULL
 )
 }
 \arguments{
@@ -75,12 +76,17 @@ Default \code{0.01}.}
 \code{"uncap_then_split"} when \code{max_workload_per_zone} is finite and \code{"direct"}
 otherwise.  \code{"uncap_then_split"} solves the uncapacitated p-median first
 (fast), then recursively splits any zone that exceeds the workload cap into
-smaller zones — each split sub-problem is tiny and solved instantly.
+smaller zones -- each split sub-problem is tiny and solved instantly.
 \code{"direct"} uses the capacitated MILP directly (may be slow for large
 instances).}
 
 \item{use_cache}{Logical.  Whether to use the disk cache (default \code{TRUE}).
 Set to \code{FALSE} to force re-computation.}
+
+\item{access_points}{Optional sf object with POINT geometries and a
+\code{tract_id} column.  Stored in the returned plan so that downstream
+functions like \code{\link[=surveyzones_sequence_zones]{surveyzones_sequence_zones()}} can use it without
+the caller having to pass it again.}
 }
 \value{
 A \code{surveyzones_plan} object.

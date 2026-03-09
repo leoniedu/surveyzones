@@ -171,56 +171,12 @@ surveyzones_sequence <- function(
   mat
 }
 
-#' Flood-Fill Zones into Threshold-Connected Groups
-#'
-#' Partitions zones into groups where every zone in a group is reachable
-#' from every other zone in the same group via a chain of pairwise
-#' distances <= `threshold`.
-#'
-#' @param mat Symmetric numeric distance matrix with zone IDs as row/col names.
-#' @param threshold Numeric scalar.  Maximum distance for two zones to be
-#'   considered connected.
-#'
-#' @return A list of character vectors, each containing the zone IDs in one
-#'   group.
-#' @keywords internal
-.flood_fill_groups <- function(mat, threshold) {
-  zone_ids <- rownames(mat)
-  n <- length(zone_ids)
-  visited <- rep(FALSE, n)
-  names(visited) <- zone_ids
-  groups <- list()
-
-  for (seed in zone_ids) {
-    if (visited[seed]) next
-
-    # BFS from seed
-    queue <- seed
-    group <- character(0)
-    while (length(queue) > 0) {
-      current <- queue[1]
-      queue <- queue[-1]
-      if (visited[current]) next
-      visited[current] <- TRUE
-      group <- c(group, current)
-
-      # Find unvisited neighbors within threshold
-      neighbors <- zone_ids[!visited & mat[current, ] <= threshold & mat[current, ] > 0]
-      queue <- c(queue, neighbors)
-    }
-
-    groups <- c(groups, list(group))
-  }
-
-  groups
-}
-
 #' Sequence Zones Within Each Partition
 #'
 #' Given a solved plan, finds a spatial ordering for the zones within each
-#' partition using a flood-fill + TSP approach.  Zones within `threshold`
-#' distance of each other are grouped together, then groups and zones within
-#' groups are ordered via TSP seriation on minimum pairwise tract distances.
+#' partition using TSP seriation on minimum pairwise tract distances.
+#' Groups are assigned by scanning consecutive distances in the TSP path
+#' and splitting wherever the distance exceeds `threshold`.
 #'
 #' @param plan A `surveyzones_plan` object.
 #' @param sparse_distances Sparse distance table (as returned by
@@ -238,15 +194,15 @@ surveyzones_sequence <- function(
 #'   missing pairwise distances are filled using haversine via
 #'   [surveyzones_complete_distances()].  Set to `FALSE` to skip
 #'   imputation (e.g., when distances are already complete).
-#' @param threshold Numeric scalar.  Maximum distance (in the same units as
-#'   `sparse_distances`, typically minutes) for two zones to be grouped
-#'   together.  Default `10`.
+#' @param threshold Numeric scalar.  Maximum consecutive distance (in the
+#'   same units as `sparse_distances`, typically minutes) between two zones
+#'   in the TSP path before starting a new group.  Default `10`.
 #' @param by_partition Logical scalar.  When `TRUE` (default), zones are
 #'   sequenced independently within each partition.  When `FALSE`, all zones
 #'   are sequenced together ignoring partition boundaries.
 #'
 #' @return The same `plan` with `plan$zone_sequence` populated — a tibble
-#'   with columns `partition_id`, `zone_id`, `zone_order`.
+#'   with columns `partition_id`, `zone_id`, `zone_order`, `group_id`.
 #'
 #' @export
 surveyzones_sequence_zones <- function(
@@ -293,59 +249,32 @@ surveyzones_sequence_zones <- function(
       ordered = purrr::map(data, \(z) {
         zone_ids <- z$zone_id
         n <- length(zone_ids)
-        if (n <= 1) return(zone_ids)
+        if (n <= 1) {
+          return(tibble::tibble(zone_id = zone_ids, group_id = 1L))
+        }
 
         # Build min-pairwise zone distance matrix
         mat <- .build_zone_dist_matrix(
           zone_ids, plan$assignments, sparse_distances
         )
 
-        # Flood-fill into threshold-connected groups
-        groups <- .flood_fill_groups(mat, threshold)
-
-        # Convert zone distance matrix to sparse format for .seriate_1d()
+        # TSP-seriate all zones into a single optimal path
         zone_sparse <- .matrix_to_sparse(mat)
+        ordered_ids <- .seriate_1d(zone_ids, zone_sparse, method = "TSP")
 
-        if (length(groups) == 1) {
-          # Single group: just TSP-seriate all zones
-          return(.seriate_1d(zone_ids, zone_sparse, method = "TSP"))
-        }
+        # Scan consecutive distances and split at gaps > threshold
+        consecutive_dists <- vapply(
+          seq_len(n - 1),
+          \(i) mat[ordered_ids[i], ordered_ids[i + 1]],
+          numeric(1)
+        )
+        group_id <- c(1L, cumsum(consecutive_dists > threshold) + 1L)
 
-        # Seriate within each group
-        ordered_groups <- purrr::map(groups, \(g) {
-          if (length(g) <= 2) return(g)
-          .seriate_1d(g, zone_sparse, method = "TSP")
-        })
-
-        # Build group-to-group distance matrix
-        ng <- length(ordered_groups)
-        group_names <- paste0("G", seq_len(ng))
-        group_mat <- matrix(Inf, ng, ng, dimnames = list(group_names, group_names))
-        diag(group_mat) <- 0
-
-        for (i in seq_len(ng - 1)) {
-          for (j in (i + 1):ng) {
-            d <- min(mat[groups[[i]], groups[[j]], drop = FALSE])
-            group_mat[i, j] <- d
-            group_mat[j, i] <- d
-          }
-        }
-
-        # Seriate groups
-        if (ng <= 2) {
-          group_order <- seq_len(ng)
-        } else {
-          group_dist <- stats::as.dist(group_mat)
-          o <- seriation::seriate(group_dist, method = "TSP")
-          group_order <- seriation::get_order(o)
-        }
-
-        # Concatenate: group order × within-group order
-        unlist(ordered_groups[group_order])
+        tibble::tibble(zone_id = ordered_ids, group_id = group_id)
       })
     ) |>
     dplyr::select(-data) |>
-    tidyr::unnest_longer(ordered, values_to = "zone_id") |>
+    tidyr::unnest(ordered) |>
     dplyr::group_by(dplyr::across(dplyr::all_of(group_col))) |>
     dplyr::mutate(zone_order = dplyr::row_number()) |>
     dplyr::ungroup()
@@ -354,13 +283,83 @@ surveyzones_sequence_zones <- function(
   if (!by_partition) {
     plan$zone_sequence <- plan$zone_sequence |>
       dplyr::left_join(zone_lookup, by = "zone_id") |>
-      dplyr::select("partition_id", "zone_id", "zone_order")
+      dplyr::select("partition_id", "zone_id", "zone_order", "group_id")
   } else {
     plan$zone_sequence <- plan$zone_sequence |>
-      dplyr::select("partition_id", "zone_id", "zone_order")
+      dplyr::select("partition_id", "zone_id", "zone_order", "group_id")
+  }
+
+  # Orient tract sequences so each zone's first tract is closest to the
+
+  # previous zone's last tract
+  if (!is.null(plan$sequence)) {
+    plan$sequence <- .orient_tract_sequences(
+      plan$sequence, plan$zone_sequence, sparse_distances
+    )
   }
 
   plan
+}
+
+
+#' Orient Tract Sequences Based on Zone Visit Order
+#'
+#' For each zone after the first, checks whether the tract sequence should
+#' be reversed so that the entry tract (first in visit order) is the one
+#' closest to the exit tract (last in visit order) of the previous zone.
+#'
+#' @param sequence Tibble with `zone_id`, `tract_id`, `visit_order`.
+#' @param zone_sequence Tibble with `partition_id`, `zone_id`, `zone_order`.
+#' @param sparse_distances Sparse distance tibble.
+#'
+#' @return Updated `sequence` tibble with potentially reversed tract orders.
+#' @keywords internal
+.orient_tract_sequences <- function(sequence, zone_sequence, sparse_distances) {
+  # Process each partition independently
+  partitions <- split(zone_sequence, zone_sequence$partition_id)
+
+  for (part in partitions) {
+    ordered_zones <- part$zone_id[order(part$zone_order)]
+    if (length(ordered_zones) <= 1) next
+
+    for (i in seq(2, length(ordered_zones))) {
+      prev_zone <- ordered_zones[i - 1]
+      curr_zone <- ordered_zones[i]
+
+      # Get the last tract of the previous zone (exit point)
+      prev_tracts <- sequence |>
+        dplyr::filter(zone_id == prev_zone) |>
+        dplyr::arrange(visit_order)
+      exit_tract <- prev_tracts$tract_id[nrow(prev_tracts)]
+
+      # Get the first and last tract of the current zone
+      curr_tracts <- sequence |>
+        dplyr::filter(zone_id == curr_zone) |>
+        dplyr::arrange(visit_order)
+      if (nrow(curr_tracts) <= 1) next
+
+      first_tract <- curr_tracts$tract_id[1]
+      last_tract <- curr_tracts$tract_id[nrow(curr_tracts)]
+
+      # Look up distances from exit to first vs exit to last
+      d_to_first <- sparse_distances |>
+        dplyr::filter(origin_id == exit_tract, destination_id == first_tract) |>
+        dplyr::pull(distance)
+      d_to_last <- sparse_distances |>
+        dplyr::filter(origin_id == exit_tract, destination_id == last_tract) |>
+        dplyr::pull(distance)
+
+      # If closer to last tract, reverse the sequence
+      if (length(d_to_first) > 0 && length(d_to_last) > 0 &&
+          d_to_last[1] < d_to_first[1]) {
+        n <- nrow(curr_tracts)
+        sequence$visit_order[sequence$zone_id == curr_zone] <-
+          rev(sequence$visit_order[sequence$zone_id == curr_zone])
+      }
+    }
+  }
+
+  sequence
 }
 
 

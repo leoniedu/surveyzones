@@ -265,8 +265,17 @@ color_by <- function(x, palette = "Set2", seed = 42) {
 make_map <- function(plan) {
   pts <- access_pts |>
     left_join(plan$assignments, by = "tract_id", suffix = c("", "_plan")) |>
-    mutate(color = color_by(partition_id)) |>
     st_transform(5880L)
+
+  # Color by group_id when zone_sequence is available, otherwise by partition_id
+  if (!is.null(plan$zone_sequence) && "group_id" %in% names(plan$zone_sequence)) {
+    group_lookup <- plan$zone_sequence |> select(zone_id, group_id)
+    pts <- pts |>
+      left_join(group_lookup, by = "zone_id") |>
+      mutate(color = color_by(group_id))
+  } else {
+    pts <- pts |> mutate(color = color_by(partition_id))
+  }
 
   hulls <- pts |>
     group_by(zone_id) |>

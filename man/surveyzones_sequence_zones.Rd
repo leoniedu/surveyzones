@@ -36,9 +36,9 @@ missing pairwise distances are filled using haversine via
 \code{\link[=surveyzones_complete_distances]{surveyzones_complete_distances()}}.  Set to \code{FALSE} to skip
 imputation (e.g., when distances are already complete).}
 
-\item{threshold}{Numeric scalar.  Maximum distance (in the same units as
-\code{sparse_distances}, typically minutes) for two zones to be grouped
-together.  Default \code{10}.}
+\item{threshold}{Numeric scalar.  Maximum consecutive distance (in the
+same units as \code{sparse_distances}, typically minutes) between two zones
+in the TSP path before starting a new group.  Default \code{10}.}
 
 \item{by_partition}{Logical scalar.  When \code{TRUE} (default), zones are
 sequenced independently within each partition.  When \code{FALSE}, all zones
@@ -46,11 +46,11 @@ are sequenced together ignoring partition boundaries.}
 }
 \value{
 The same \code{plan} with \code{plan$zone_sequence} populated — a tibble
-with columns \code{partition_id}, \code{zone_id}, \code{zone_order}.
+with columns \code{partition_id}, \code{zone_id}, \code{zone_order}, \code{group_id}.
 }
 \description{
 Given a solved plan, finds a spatial ordering for the zones within each
-partition using a flood-fill + TSP approach.  Zones within \code{threshold}
-distance of each other are grouped together, then groups and zones within
-groups are ordered via TSP seriation on minimum pairwise tract distances.
+partition using TSP seriation on minimum pairwise tract distances.
+Groups are assigned by scanning consecutive distances in the TSP path
+and splitting wherever the distance exceeds \code{threshold}.
 }

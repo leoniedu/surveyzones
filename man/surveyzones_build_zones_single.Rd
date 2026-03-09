@@ -66,7 +66,7 @@ Default \code{0.01}.}
 \code{"uncap_then_split"} when \code{max_workload_per_zone} is finite and \code{"direct"}
 otherwise.  \code{"uncap_then_split"} solves the uncapacitated p-median first
 (fast), then recursively splits any zone that exceeds the workload cap into
-smaller zones — each split sub-problem is tiny and solved instantly.
+smaller zones -- each split sub-problem is tiny and solved instantly.
 \code{"direct"} uses the capacitated MILP directly (may be slow for large
 instances).}
 }

@@ -118,6 +118,7 @@ test_that("zone sequencing produces correct zone_order for line topology", {
 
   expect_false(is.null(plan$zone_sequence))
   expect_true("zone_order" %in% names(plan$zone_sequence))
+  expect_true("group_id" %in% names(plan$zone_sequence))
   expect_equal(nrow(plan$zone_sequence), 4)
   expect_equal(sort(plan$zone_sequence$zone_order), 1:4)
 
@@ -493,55 +494,7 @@ test_that("sequence_zones uses min pairwise distances, not center-to-center", {
   expect_equal(abs(z1_order - z2_order), 1)
 })
 
-test_that(".flood_fill_groups finds threshold-connected components", {
-  # 5 zones: Z1-Z2 close (d=2), Z2-Z3 close (d=3), Z4-Z5 close (d=1)
-  # Z3-Z4 far (d=20)
-  # threshold=5 → two groups: {Z1,Z2,Z3} and {Z4,Z5}
-  mat <- matrix(Inf, 5, 5, dimnames = list(paste0("Z", 1:5), paste0("Z", 1:5)))
-  diag(mat) <- 0
-  mat["Z1", "Z2"] <- 2; mat["Z2", "Z1"] <- 2
-  mat["Z2", "Z3"] <- 3; mat["Z3", "Z2"] <- 3
-  mat["Z1", "Z3"] <- 5; mat["Z3", "Z1"] <- 5
-  mat["Z3", "Z4"] <- 20; mat["Z4", "Z3"] <- 20
-  mat["Z4", "Z5"] <- 1; mat["Z5", "Z4"] <- 1
-  mat["Z1", "Z4"] <- 22; mat["Z4", "Z1"] <- 22
-  mat["Z1", "Z5"] <- 23; mat["Z5", "Z1"] <- 23
-  mat["Z2", "Z4"] <- 20; mat["Z4", "Z2"] <- 20
-  mat["Z2", "Z5"] <- 21; mat["Z5", "Z2"] <- 21
-  mat["Z3", "Z5"] <- 21; mat["Z5", "Z3"] <- 21
-
-  groups <- surveyzones:::.flood_fill_groups(mat, threshold = 5)
-
-  expect_equal(length(groups), 2)
-  group_sizes <- sort(vapply(groups, length, integer(1)))
-  expect_equal(group_sizes, c(2L, 3L))
-
-  big <- groups[[which(vapply(groups, length, integer(1)) == 3)]]
-  small <- groups[[which(vapply(groups, length, integer(1)) == 2)]]
-  expect_equal(sort(big), c("Z1", "Z2", "Z3"))
-  expect_equal(sort(small), c("Z4", "Z5"))
-})
-
-test_that(".flood_fill_groups puts all zones in one group when threshold is large", {
-  mat <- matrix(5, 3, 3, dimnames = list(paste0("Z", 1:3), paste0("Z", 1:3)))
-  diag(mat) <- 0
-
-  groups <- surveyzones:::.flood_fill_groups(mat, threshold = 10)
-  expect_equal(length(groups), 1)
-  expect_equal(sort(groups[[1]]), paste0("Z", 1:3))
-})
-
-test_that(".flood_fill_groups makes singleton groups when threshold is tiny", {
-  mat <- matrix(5, 3, 3, dimnames = list(paste0("Z", 1:3), paste0("Z", 1:3)))
-  diag(mat) <- 0
-
-  groups <- surveyzones:::.flood_fill_groups(mat, threshold = 1)
-  expect_equal(length(groups), 3)
-  all_zones <- sort(unlist(groups))
-  expect_equal(all_zones, paste0("Z", 1:3))
-})
-
-test_that("zone sequencing groups zones by threshold", {
+test_that("zone sequencing groups zones by threshold (gap-based)", {
   # 6 zones in two clusters: Z1-Z3 close together, Z4-Z6 close together
   # Clusters are far apart (distance 50)
   zones_tbl <- tibble::tibble(
@@ -604,4 +557,79 @@ test_that("zone sequencing groups zones by threshold", {
     max(cluster1_orders) < min(cluster2_orders) ||
     max(cluster2_orders) < min(cluster1_orders)
   )
+
+  # group_id should distinguish the two clusters
+  expect_true("group_id" %in% names(ordered))
+  cluster1_groups <- unique(ordered$group_id[ordered$zone_id %in% paste0("Z", 1:3)])
+  cluster2_groups <- unique(ordered$group_id[ordered$zone_id %in% paste0("Z", 4:6)])
+  expect_length(cluster1_groups, 1)
+  expect_length(cluster2_groups, 1)
+  expect_false(cluster1_groups == cluster2_groups)
+})
+
+test_that(".orient_tract_sequences reverses tracts when exit is closer to last", {
+  # Zone A has tracts T1 -> T2 -> T3 (visit_order 1,2,3)
+  # Zone B has tracts T4 -> T5 -> T6 (visit_order 1,2,3)
+  # Exit of zone A = T3, entry of zone B = T4, end of zone B = T6
+  # If T3 is closer to T6 than T4, zone B should be reversed
+  sequence <- tibble::tibble(
+    zone_id  = c(rep("ZA", 3), rep("ZB", 3)),
+    tract_id = c("T1", "T2", "T3", "T4", "T5", "T6"),
+    visit_order = c(1L, 2L, 3L, 1L, 2L, 3L)
+  )
+
+  zone_sequence <- tibble::tibble(
+    partition_id = "P1",
+    zone_id = c("ZA", "ZB"),
+    zone_order = 1:2,
+    group_id = c(1L, 1L)
+  )
+
+  # T3 -> T4 = 10, T3 -> T6 = 2 (closer to last, should reverse)
+  sparse_distances <- tibble::tibble(
+    origin_id      = c("T3", "T3"),
+    destination_id = c("T4", "T6"),
+    distance       = c(10,   2)
+  )
+
+  result <- surveyzones:::.orient_tract_sequences(
+    sequence, zone_sequence, sparse_distances
+  )
+
+  zb <- result |> dplyr::filter(zone_id == "ZB") |> dplyr::arrange(visit_order)
+  # After reversal: T6 should be first (visit_order 1), T4 last (visit_order 3)
+  expect_equal(zb$tract_id, c("T6", "T5", "T4"))
+
+  # Zone A should be unchanged
+  za <- result |> dplyr::filter(zone_id == "ZA") |> dplyr::arrange(visit_order)
+  expect_equal(za$tract_id, c("T1", "T2", "T3"))
+})
+
+test_that(".orient_tract_sequences does not reverse when entry is already closer", {
+  sequence <- tibble::tibble(
+    zone_id  = c(rep("ZA", 3), rep("ZB", 3)),
+    tract_id = c("T1", "T2", "T3", "T4", "T5", "T6"),
+    visit_order = c(1L, 2L, 3L, 1L, 2L, 3L)
+  )
+
+  zone_sequence <- tibble::tibble(
+    partition_id = "P1",
+    zone_id = c("ZA", "ZB"),
+    zone_order = 1:2,
+    group_id = c(1L, 1L)
+  )
+
+  # T3 -> T4 = 2 (closer to first, no reversal), T3 -> T6 = 10
+  sparse_distances <- tibble::tibble(
+    origin_id      = c("T3", "T3"),
+    destination_id = c("T4", "T6"),
+    distance       = c(2,   10)
+  )
+
+  result <- surveyzones:::.orient_tract_sequences(
+    sequence, zone_sequence, sparse_distances
+  )
+
+  zb <- result |> dplyr::filter(zone_id == "ZB") |> dplyr::arrange(visit_order)
+  expect_equal(zb$tract_id, c("T4", "T5", "T6"))
 })

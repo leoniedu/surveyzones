@@ -185,7 +185,7 @@ validate_access_points <- function(access_points,
 #' `distance = haversine_km / speed_kmh * 60` (result in minutes).
 #'
 #' Existing pairs are preserved unchanged.  Use this before
-#' [surveyzones_sequence_zones()] with `method = "mds"` when the
+#' [surveyzones_sequence_zones()] when the
 #' sparse distance table may be incomplete.
 #'
 #' @param sparse_distances A tibble with columns `origin_id`,

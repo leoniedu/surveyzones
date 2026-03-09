@@ -33,6 +33,6 @@ in km and converts to the distance unit using a speed parameter:
 }
 \details{
 Existing pairs are preserved unchanged.  Use this before
-\code{\link[=surveyzones_sequence_zones]{surveyzones_sequence_zones()}} with \code{method = "mds"} when the
+\code{\link[=surveyzones_sequence_zones]{surveyzones_sequence_zones()}} when the
 sparse distance table may be incomplete.
 }

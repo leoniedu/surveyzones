@@ -13,7 +13,7 @@
 surveyzones_clear_cache <- function(force = FALSE) {
   cache_dir <- .pkg$cache_dir
   if (!dir.exists(cache_dir)) {
-    cli::cli_alert_info("Cache directory not found — nothing to clear.")
+    cli::cli_alert_info("Cache directory not found \u2014 nothing to clear.")
     return(invisible(FALSE))
   }
 
@@ -28,7 +28,7 @@ surveyzones_clear_cache <- function(force = FALSE) {
       sprintf("Clear surveyzones cache (%s)? [y/N] ", size)
     )
     if (!tolower(answer) %in% c("y", "yes")) {
-      cli::cli_alert_warning("Aborted — cache not cleared.")
+      cli::cli_alert_warning("Aborted \u2014 cache not cleared.")
       return(invisible(FALSE))
     }
   }

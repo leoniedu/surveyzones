@@ -4,7 +4,13 @@
 \alias{new_surveyzones_plan}
 \title{Create a surveyzones_plan Object}
 \usage{
-new_surveyzones_plan(assignments, zones, parameters, diagnostics)
+new_surveyzones_plan(
+  assignments,
+  zones,
+  parameters,
+  diagnostics,
+  access_points = NULL
+)
 }
 \arguments{
 \item{assignments}{A tibble with columns \code{tract_id}, \code{zone_id},
@@ -16,6 +22,8 @@ new_surveyzones_plan(assignments, zones, parameters, diagnostics)
 \item{parameters}{A named list of model parameters.}
 
 \item{diagnostics}{A named list of solver diagnostics.}
+
+\item{access_points}{Optional sf object with representative points.}
 }
 \value{
 A \code{surveyzones_plan} object.

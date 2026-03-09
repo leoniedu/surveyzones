@@ -8,17 +8,20 @@
 #'   `center_tract_id`, `total_workload`, `diameter`, `n_tracts`.
 #' @param parameters A named list of model parameters.
 #' @param diagnostics A named list of solver diagnostics.
+#' @param access_points Optional sf object with representative points.
 #'
 #' @return A `surveyzones_plan` object.
 #' @keywords internal
 new_surveyzones_plan <- function(assignments, zones, parameters,
-                                 diagnostics) {
+                                 diagnostics, access_points = NULL) {
   structure(
     list(
       assignments = assignments,
       zones = zones,
       parameters = parameters,
       diagnostics = diagnostics,
+      access_points = access_points,
+      zone_sequence = NULL,
       sequence = NULL
     ),
     class = "surveyzones_plan"

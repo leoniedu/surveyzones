@@ -10,7 +10,9 @@ utils::globalVariables(c(
   "zone_id", "partition_id",
   "xend", "yend",
   "data",  # tidyr::nest() creates this variable
-  "surveyzones_build_zones_mem"  # memoised version created in .onLoad
+  "surveyzones_build_zones_mem",  # memoised version created in .onLoad
+  ".data", ".tract", "result", "zone_score", "zone_order",
+  "reorder"
 ))
 
 # Package-level environment for mutable state

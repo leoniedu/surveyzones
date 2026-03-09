@@ -44,6 +44,7 @@ surveyzones_export_plan <- function(plan, path) {
   params_tbl <- tibble::tibble(
     parameter = names(plan$parameters),
     value = vapply(plan$parameters, function(v) {
+      if (is.null(v)) return(NA_character_)
       if (inherits(v, "POSIXct")) format(v) else as.character(v)
     }, character(1))
   )

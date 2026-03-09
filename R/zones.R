@@ -184,11 +184,15 @@ utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tra
 #'   `"uncap_then_split"` when `max_workload_per_zone` is finite and `"direct"`
 #'   otherwise.  `"uncap_then_split"` solves the uncapacitated p-median first
 #'   (fast), then recursively splits any zone that exceeds the workload cap into
-#'   smaller zones — each split sub-problem is tiny and solved instantly.
+#'   smaller zones -- each split sub-problem is tiny and solved instantly.
 #'   `"direct"` uses the capacitated MILP directly (may be slow for large
 #'   instances).
 #' @param use_cache Logical.  Whether to use the disk cache (default `TRUE`).
 #'   Set to `FALSE` to force re-computation.
+#' @param access_points Optional sf object with POINT geometries and a
+#'   `tract_id` column.  Stored in the returned plan so that downstream
+#'   functions like [surveyzones_sequence_zones()] can use it without
+#'   the caller having to pass it again.
 #'
 #' @return A `surveyzones_plan` object.
 #'
@@ -208,7 +212,8 @@ surveyzones_build_zones <- function(
   rel_tol = 0.01,
   verbose = FALSE,
   strategy = "auto",
-  use_cache = TRUE
+  use_cache = TRUE,
+  access_points = NULL
 ) {
   args <- list(
     sparse_distances      = sparse_distances,
@@ -234,11 +239,15 @@ surveyzones_build_zones <- function(
     } else {
       cli::cli_alert_info("Computing and caching result.")
     }
-    do.call(surveyzones_build_zones_mem, args)
+    plan <- do.call(surveyzones_build_zones_mem, args)
   } else {
     cli::cli_alert_info("Computing without cache.")
-    do.call(.surveyzones_build_zones_impl, args)
+    plan <- do.call(.surveyzones_build_zones_impl, args)
   }
+
+  # Attach access points for downstream use (not part of cache key)
+  plan$access_points <- access_points
+  plan
 }
 
 
@@ -293,7 +302,7 @@ surveyzones_build_zones_single <- function(
     "n = {n}, total workload = {round(total_workload, 1)}, K0 = {K0}, K_max = {K_max}, model = {model_type}"
   )
 
-  # ── Connected component decomposition ──────────────────────────────────────
+  # -- Connected component decomposition --------------------------------------
   # Filter distances to this partition and D_max for graph connectivity
   tract_ids_chr <- as.character(tracts$tract_id)
   sparse_distances <- full_sparse_distances |>
@@ -319,7 +328,7 @@ surveyzones_build_zones_single <- function(
   if (comp$no > 1) {
     comp_sizes <- sort(comp$csize, decreasing = TRUE)
     cli::cli_alert_info(
-      "Disconnected graph: {comp$no} components (sizes: {paste(comp_sizes, collapse = ', ')}) — solving each independently"
+      "Disconnected graph: {comp$no} components (sizes: {paste(comp_sizes, collapse = ', ')}) \u2014 solving each independently"
     )
 
     # Map each tract to its component
@@ -455,10 +464,10 @@ surveyzones_build_zones_single <- function(
       )
     ))
   }
-  # ── End component decomposition ────────────────────────────────────────────
+  # -- End component decomposition --------------------------------------------
 
-  # ── uncap_then_split strategy ──────────────────────────────────────────────
-  # Resolve strategy: "auto" → "uncap_then_split" when capacitated, else "direct"
+  # -- uncap_then_split strategy ------------------------------------------------
+  # Resolve strategy: "auto" -> "uncap_then_split" when capacitated, else "direct"
   effective_strategy <- if (strategy == "auto") {
     if (capacitated) "uncap_then_split" else "direct"
   } else {
@@ -480,7 +489,8 @@ surveyzones_build_zones_single <- function(
       verbose = verbose
     ))
   }
-  # ── End uncap_then_split ────────────────────────────────────────────────────
+
+  # -- End uncap_then_split ----------------------------------------------------
 
   for (K in seq(K0, K_max)) {
     cli::cli_alert("Trying K = {K}...")
@@ -761,7 +771,7 @@ surveyzones_solve_fixed_K <- function(
       ompr::sum_over(pair_d[p] * x[p], p = 1:n_x),
       sense = "min"
     ) |>
-    # x[p] <= y[j] — can only assign to an open center
+    # x[p] <= y[j] -- can only assign to an open center
     ompr::add_constraint(
       x[p] <= y[pair_j[p]],
       p = 1:n_x
@@ -948,7 +958,7 @@ surveyzones_solve_fixed_K <- function(
   start_time <- proc.time()[["elapsed"]]
 
   cli::cli_alert_info(
-    "Strategy: uncap_then_split — solving uncapacitated with K = {K0}, then splitting oversized zones"
+    "Strategy: uncap_then_split \u2014 solving uncapacitated with K = {K0}, then splitting oversized zones"
   )
 
   # Phase 1: uncapacitated solve (fast)
@@ -986,7 +996,7 @@ surveyzones_solve_fixed_K <- function(
 
   n_over <- length(oversized)
   if (n_over == 0L) {
-    cli::cli_alert_success("All zones satisfy the workload cap — no splitting needed")
+    cli::cli_alert_success("All zones satisfy the workload cap \u2014 no splitting needed")
     return(uncap_result)
   }
 

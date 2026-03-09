@@ -80,6 +80,7 @@ surveyzones_plot_connectivity <- function(tracts_sf, sparse_distances, D_max) {
 #'   `"size"`, or `"all"` for a faceted summary.
 #'
 #' @return A `ggplot` object.
+#' @importFrom stats reorder
 #' @export
 surveyzones_plot_statistics <- function(plan, type = "workload") {
   if (!inherits(plan, "surveyzones_plan")) {
