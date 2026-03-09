@@ -246,6 +246,48 @@ surveyzones_sequence <- function(
 }
 
 
+#' Rename zone IDs to sequential {partition_id}_{group}.{pos:003d} format
+#'
+#' Applied at the end of [surveyzones_sequence()] after zone_sequence is
+#' computed.  Builds an old->new lookup and applies it to all four plan tables.
+#' Also drops `group_id` from `assignments` (character phase-1 group, now
+#' redundant with `zones$center_tract_id`).
+#'
+#' @param plan A `surveyzones_plan` with `zone_sequence` already set.
+#' @return The plan with renamed zone_ids in all four tables.
+#' @keywords internal
+.rename_zones <- function(plan) {
+  # Build lookup: pos = rank within (partition_id, group_id) ordered by zone_order
+  lookup <- plan$zone_sequence |>
+    dplyr::arrange(.data$partition_id, .data$group_id, .data$zone_order) |>
+    dplyr::mutate(
+      pos = dplyr::row_number(),
+      .by = c("partition_id", "group_id")
+    ) |>
+    dplyr::mutate(
+      new_zone_id = paste0(
+        .data$partition_id, "_",
+        .data$group_id, ".",
+        sprintf("%03d", .data$pos)
+      )
+    ) |>
+    dplyr::select("zone_id", "new_zone_id")
+
+  id_map <- stats::setNames(lookup$new_zone_id, lookup$zone_id)
+
+  # Apply to all four tables
+  plan$zone_sequence$zone_id <- unname(id_map[plan$zone_sequence$zone_id])
+  plan$zones$zone_id         <- unname(id_map[plan$zones$zone_id])
+  plan$assignments$zone_id   <- unname(id_map[plan$assignments$zone_id])
+  plan$sequence$zone_id      <- unname(id_map[plan$sequence$zone_id])
+
+  # Drop character group_id from assignments (redundant with zones$center_tract_id)
+  plan$assignments <- dplyr::select(plan$assignments, -dplyr::any_of("group_id"))
+
+  plan
+}
+
+
 #' Seriate a Set of IDs into 1D Order
 #'
 #' Builds a symmetric distance matrix from a sparse distance table and
