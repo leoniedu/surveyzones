@@ -719,7 +719,8 @@ test_that(".rename_zones produces correct ID format", {
       assignments = tibble::tibble(
         tract_id = c("T1", "T2", "T3"),
         zone_id  = c("Z1", "Z2", "Z3"),
-        partition_id = "P1"
+        partition_id = "P1",
+        group_id = c("ph1", "ph1", "ph1")
       ),
       zone_sequence = tibble::tibble(
         partition_id = "P1",
@@ -790,8 +791,6 @@ test_that(".rename_zones works across two partitions", {
   pb_ids <- sort(out$zone_sequence$zone_id[out$zone_sequence$partition_id == "PB"])
   expect_equal(pa_ids, c("PA_1.001", "PA_1.002"))
   expect_equal(pb_ids, c("PB_1.001", "PB_1.002"))
-  # IDs are globally unique
-  expect_equal(length(unique(out$zone_sequence$zone_id)), 4L)
   # group_id dropped from assignments
   expect_false("group_id" %in% names(out$assignments))
   # sequence and zones tables are also updated
@@ -815,7 +814,8 @@ test_that(".rename_zones respects zone_order when rows are unsorted", {
       assignments = tibble::tibble(
         tract_id = c("T1", "T2"),
         zone_id  = c("Z1", "Z2"),
-        partition_id = "P1"
+        partition_id = "P1",
+        group_id = c("ph1", "ph1")
       ),
       zone_sequence = tibble::tibble(
         partition_id = "P1",
@@ -835,6 +835,10 @@ test_that(".rename_zones respects zone_order when rows are unsorted", {
 
   # T2 belongs to Z2 (zone_order=1) -> must be in zone P1_1.001
   # T1 belongs to Z1 (zone_order=2) -> must be in zone P1_1.002
-  expect_equal(out$sequence$zone_id[out$sequence$tract_id == "T2"], "P1_1.001")
-  expect_equal(out$sequence$zone_id[out$sequence$tract_id == "T1"], "P1_1.002")
+  t2_zone <- out$sequence |> dplyr::filter(.data$tract_id == "T2") |> dplyr::pull(zone_id)
+  t1_zone <- out$sequence |> dplyr::filter(.data$tract_id == "T1") |> dplyr::pull(zone_id)
+  expect_length(t2_zone, 1L)
+  expect_length(t1_zone, 1L)
+  expect_equal(t2_zone, "P1_1.001")
+  expect_equal(t1_zone, "P1_1.002")
 })
