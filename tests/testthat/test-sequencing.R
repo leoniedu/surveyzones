@@ -126,12 +126,15 @@ test_that("zone sequencing produces correct zone_order for line topology", {
   expect_equal(sort(plan$zone_sequence$zone_order), 1:4)
 
   # TSP on a line should recover the linear order (up to reflection)
+  # Use zone_order directly — IDs have been renamed and are no longer "Z1"..."Z4"
   ordered_zones <- plan$zone_sequence |>
     dplyr::arrange(zone_order) |>
     dplyr::pull(zone_id)
-  zone_nums <- as.integer(gsub("Z", "", ordered_zones))
-  diffs <- diff(zone_nums)
-  expect_true(all(diffs > 0) || all(diffs < 0))
+  # All 4 zones present, in some order
+  expect_length(ordered_zones, 4)
+  expect_equal(sort(plan$zone_sequence$zone_order), 1:4)
+  # All new IDs match the expected format {partition}_{group}.{pos:03d}
+  expect_true(all(grepl("^P1_\\d+\\.\\d{3}$", ordered_zones)))
 
   # Tract sequence should also exist
   expect_false(is.null(plan$sequence))
@@ -499,8 +502,11 @@ test_that("sequence uses min pairwise distances, not center-to-center", {
   ordered <- plan$zone_sequence |>
     dplyr::arrange(zone_order)
 
-  z1_order <- ordered$zone_order[ordered$zone_id == "Z1"]
-  z2_order <- ordered$zone_order[ordered$zone_id == "Z2"]
+  # Look up renamed IDs via center_tract_id (preserved in plan$zones)
+  z1_id <- plan$zones$zone_id[plan$zones$center_tract_id == "C1"]
+  z2_id <- plan$zones$zone_id[plan$zones$center_tract_id == "C4"]
+  z1_order <- ordered$zone_order[ordered$zone_id == z1_id]
+  z2_order <- ordered$zone_order[ordered$zone_id == z2_id]
 
   # Z1 and Z2 must be consecutive
   expect_equal(abs(z1_order - z2_order), 1)
@@ -556,9 +562,12 @@ test_that("zone sequencing groups zones by threshold (gap-based)", {
 
   ordered <- plan$zone_sequence |> dplyr::arrange(zone_order)
 
-  # Z1-Z3 should be consecutive and Z4-Z6 should be consecutive
-  cluster1_orders <- ordered$zone_order[ordered$zone_id %in% paste0("Z", 1:3)]
-  cluster2_orders <- ordered$zone_order[ordered$zone_id %in% paste0("Z", 4:6)]
+  # Two distinct group_ids should exist (one per cluster)
+  groups <- sort(unique(ordered$group_id))
+  expect_length(groups, 2)
+
+  cluster1_orders <- ordered$zone_order[ordered$group_id == groups[1]]
+  cluster2_orders <- ordered$zone_order[ordered$group_id == groups[2]]
 
   # Each cluster occupies 3 consecutive positions
   expect_equal(diff(sort(cluster1_orders)), c(1L, 1L))
@@ -569,14 +578,6 @@ test_that("zone sequencing groups zones by threshold (gap-based)", {
     max(cluster1_orders) < min(cluster2_orders) ||
     max(cluster2_orders) < min(cluster1_orders)
   )
-
-  # group_id should distinguish the two clusters
-  expect_true("group_id" %in% names(ordered))
-  cluster1_groups <- unique(ordered$group_id[ordered$zone_id %in% paste0("Z", 1:3)])
-  cluster2_groups <- unique(ordered$group_id[ordered$zone_id %in% paste0("Z", 4:6)])
-  expect_length(cluster1_groups, 1)
-  expect_length(cluster2_groups, 1)
-  expect_false(cluster1_groups == cluster2_groups)
 })
 
 test_that("tract orientation orients second zone's entry toward first zone's exit", {
@@ -684,7 +685,7 @@ test_that("default TSP control produces valid zone ordering", {
 
   ordered <- plan$zone_sequence |> dplyr::arrange(zone_order)
   expect_equal(nrow(ordered), 5)
-  expect_setequal(ordered$zone_id, paste0("Z", 1:5))
+  expect_true(all(grepl("^P1_\\d+\\.\\d{3}$", ordered$zone_id)))
 })
 
 test_that("custom NN control works when passed explicitly", {

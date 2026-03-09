@@ -82,7 +82,7 @@ surveyzones_sequence <- function(
     plan, sparse_distances, method, control
   )
 
-  plan
+  .rename_zones(plan)
 }
 
 
