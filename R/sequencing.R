@@ -14,12 +14,10 @@
 #'   Default `"TSP"`.
 #' @param control Named list of method-specific parameters passed to
 #'   [seriation::seriate()] (and through to [TSP::solve_TSP()] when
-#'   `method = "TSP"`).  Default `list(method = "nn", rep = 20)` —
-#'   nearest-neighbour from 20 random starts, keeping the best tour.
-#'   NN keeps every consecutive pair close (ideal for sliding-window
-#'   fieldwork).  Use `list(method = "2-opt")` or `NULL` to revert to
-#'   the default TSP heuristic.  Note: when `method` is not `"TSP"`,
-#'   these TSP-specific control keys are silently ignored by seriation.
+#'   `method = "TSP"`).  Default `NULL` (seriation's default heuristic).
+#'   Example: `list(method = "nn", rep = 20)` for nearest-neighbour.
+#'   When `method` is not `"TSP"`, TSP-specific control keys are
+#'   silently stripped.
 #' @param access_points An sf object with POINT geometries and a
 #'   `tract_id` column.  Used to fill missing pairwise distances via
 #'   haversine ([surveyzones_complete_distances()]) so that every
@@ -50,7 +48,7 @@ surveyzones_sequence <- function(
   plan,
   sparse_distances,
   method = "TSP",
-  control = list(method = "nn", rep = 20),
+  control = NULL,
   access_points = NULL,
   speed_kmh = 0.1,
   complete_distances = TRUE,
@@ -257,12 +255,12 @@ surveyzones_sequence <- function(
 #' @param sparse_distances Sparse distance tibble.
 #' @param method Character scalar passed to [seriation::seriate()].
 #' @param control Named list of method-specific parameters passed to
-#'   [seriation::seriate()].  Default `list(method = "nn", rep = 20)`.
+#'   [seriation::seriate()].  Default `NULL`.
 #'
 #' @return Character vector of IDs in seriation order.
 #' @keywords internal
 .seriate_1d <- function(ids, sparse_distances, method = "TSP",
-                        control = list(method = "nn", rep = 20)) {
+                        control = NULL) {
   n <- length(ids)
   if (n <= 1) {
     return(ids)
@@ -379,7 +377,7 @@ surveyzones_sequence <- function(
 #'   (e.g., `"TSP"`, `"SPIN_NH"`, `"Spectral"`, `"OLO"`).
 #'   Default `"TSP"`.
 #' @param control Named list of method-specific parameters passed to
-#'   [seriation::seriate()].  Default `list(method = "nn", rep = 20)`.
+#'   [seriation::seriate()].  Default `NULL`.
 #'
 #' @return Character vector of tract_ids in visit order.
 #'
@@ -388,7 +386,7 @@ surveyzones_sequence_tracts <- function(
   tract_ids,
   sparse_distances,
   method = "TSP",
-  control = list(method = "nn", rep = 20)
+  control = NULL
 ) {
   n <- length(tract_ids)
   if (n <= 2) {

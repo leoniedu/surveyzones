@@ -4,12 +4,7 @@
 \alias{.seriate_1d}
 \title{Seriate a Set of IDs into 1D Order}
 \usage{
-.seriate_1d(
-  ids,
-  sparse_distances,
-  method = "TSP",
-  control = list(method = "nn", rep = 20)
-)
+.seriate_1d(ids, sparse_distances, method = "TSP", control = NULL)
 }
 \arguments{
 \item{ids}{Character vector of IDs to order.}
@@ -19,7 +14,7 @@
 \item{method}{Character scalar passed to \code{\link[seriation:seriate]{seriation::seriate()}}.}
 
 \item{control}{Named list of method-specific parameters passed to
-\code{\link[seriation:seriate]{seriation::seriate()}}.  Default \code{list(method = "nn", rep = 20)}.}
+\code{\link[seriation:seriate]{seriation::seriate()}}.  Default \code{NULL}.}
 }
 \value{
 Character vector of IDs in seriation order.

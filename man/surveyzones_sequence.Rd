@@ -8,7 +8,7 @@ surveyzones_sequence(
   plan,
   sparse_distances,
   method = "TSP",
-  control = list(method = "nn", rep = 20),
+  control = NULL,
   access_points = NULL,
   speed_kmh = 0.1,
   complete_distances = TRUE,
@@ -29,12 +29,10 @@ Default \code{"TSP"}.}
 
 \item{control}{Named list of method-specific parameters passed to
 \code{\link[seriation:seriate]{seriation::seriate()}} (and through to \code{\link[TSP:solve_TSP]{TSP::solve_TSP()}} when
-\code{method = "TSP"}).  Default \code{list(method = "nn", rep = 20)} —
-nearest-neighbour from 20 random starts, keeping the best tour.
-NN keeps every consecutive pair close (ideal for sliding-window
-fieldwork).  Use \code{list(method = "2-opt")} or \code{NULL} to revert to
-the default TSP heuristic.  Note: when \code{method} is not \code{"TSP"},
-these TSP-specific control keys are silently ignored by seriation.}
+\code{method = "TSP"}).  Default \code{NULL} (seriation's default heuristic).
+Example: \code{list(method = "nn", rep = 20)} for nearest-neighbour.
+When \code{method} is not \code{"TSP"}, TSP-specific control keys are
+silently stripped.}
 
 \item{access_points}{An sf object with POINT geometries and a
 \code{tract_id} column.  Used to fill missing pairwise distances via

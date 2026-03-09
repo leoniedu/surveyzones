@@ -72,7 +72,6 @@ test_that("TSP seriation method parameter is passed through", {
 })
 
 test_that("zone sequencing produces correct zone_order for line topology", {
-  withr::local_seed(42)
   # 4 zones in a line: Z1--Z2--Z3--Z4, all within threshold
   zones_tbl <- tibble::tibble(
     zone_id = paste0("Z", 1:4),
@@ -300,7 +299,6 @@ test_that("zone sequencing completes incomplete distances via haversine", {
 })
 
 test_that("by_partition = FALSE sequences all zones together", {
-  withr::local_seed(42)
   zones_tbl <- tibble::tibble(
     zone_id = paste0("Z", 1:4),
     partition_id = c("P1", "P1", "P2", "P2"),
@@ -439,7 +437,6 @@ test_that(".build_zone_dist_matrix has no Inf when distances are complete", {
 })
 
 test_that("sequence uses min pairwise distances, not center-to-center", {
-  withr::local_seed(42)
   # Z1 center at C1 (far left), Z2 center at C4 (far right)
   # But Z1 contains T2 (near right) and Z2 contains T3 (near left)
   # So min-pairwise(Z1,Z2) = d(T2,T3) which is small
@@ -510,7 +507,6 @@ test_that("sequence uses min pairwise distances, not center-to-center", {
 })
 
 test_that("zone sequencing groups zones by threshold (gap-based)", {
-  withr::local_seed(42)
   # 6 zones in two clusters: Z1-Z3 close together, Z4-Z6 close together
   # Clusters are far apart (distance 50)
   zones_tbl <- tibble::tibble(
@@ -584,7 +580,6 @@ test_that("zone sequencing groups zones by threshold (gap-based)", {
 })
 
 test_that("tract orientation orients second zone's entry toward first zone's exit", {
-  withr::local_seed(42)
   # Two zones on a line, well-separated:
   # ZA tracts at positions 0, 1, 2
   # ZB tracts at positions 10, 11, 12
@@ -647,11 +642,8 @@ test_that("tract orientation orients second zone's entry toward first zone's exi
   expect_true(abs(entry_pos - exit_pos) <= abs(tail_pos - exit_pos))
 })
 
-test_that("default NN control keeps consecutive zone pairs close", {
-  withr::local_seed(42)
-
+test_that("default TSP control produces valid zone ordering", {
   # 5 zones on a line: Z1(0)--Z2(1)--Z3(2)--Z4(3)--Z5(4)
-  # NN should never skip a neighbour (unlike TSP which might for global opt)
   zones_tbl <- tibble::tibble(
     zone_id = paste0("Z", 1:5),
     partition_id = "P1",
@@ -685,19 +677,17 @@ test_that("default NN control keeps consecutive zone pairs close", {
     class = "surveyzones_plan"
   )
 
-  # Default control = list(method = "nn", rep = 20)
+  # Default control = NULL (seriation's default TSP heuristic)
   plan <- surveyzones_sequence(
     plan, pairs, threshold = 100, complete_distances = FALSE
   )
 
   ordered <- plan$zone_sequence |> dplyr::arrange(zone_order)
-  zone_nums <- as.integer(gsub("Z", "", ordered$zone_id))
-
-  # Every consecutive pair should be distance 1 (adjacent on the line)
-  expect_true(all(abs(diff(zone_nums)) == 1))
+  expect_equal(nrow(ordered), 5)
+  expect_setequal(ordered$zone_id, paste0("Z", 1:5))
 })
 
-test_that("control = NULL overrides default NN and still works", {
+test_that("custom NN control works when passed explicitly", {
   ids <- paste0("T", 1:4)
   pairs <- tidyr::expand_grid(origin_id = ids, destination_id = ids) |>
     dplyr::filter(origin_id != destination_id) |>
@@ -708,9 +698,9 @@ test_that("control = NULL overrides default NN and still works", {
     ) |>
     dplyr::select(origin_id, destination_id, distance)
 
-  # control = NULL should use seriation's default TSP heuristic
+  withr::local_seed(42)
   result <- surveyzones_sequence_tracts(ids, pairs, method = "TSP",
-                                        control = NULL)
+                                        control = list(method = "nn", rep = 20))
   expect_equal(sort(result), sort(ids))
   expect_equal(length(result), 4)
 })

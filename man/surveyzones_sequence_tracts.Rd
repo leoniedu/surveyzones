@@ -8,7 +8,7 @@ surveyzones_sequence_tracts(
   tract_ids,
   sparse_distances,
   method = "TSP",
-  control = list(method = "nn", rep = 20)
+  control = NULL
 )
 }
 \arguments{
@@ -21,7 +21,7 @@ surveyzones_sequence_tracts(
 Default \code{"TSP"}.}
 
 \item{control}{Named list of method-specific parameters passed to
-\code{\link[seriation:seriate]{seriation::seriate()}}.  Default \code{list(method = "nn", rep = 20)}.}
+\code{\link[seriation:seriate]{seriation::seriate()}}.  Default \code{NULL}.}
 }
 \value{
 Character vector of tract_ids in visit order.
