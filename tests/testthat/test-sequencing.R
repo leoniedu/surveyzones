@@ -794,4 +794,47 @@ test_that(".rename_zones works across two partitions", {
   expect_equal(length(unique(out$zone_sequence$zone_id)), 4L)
   # group_id dropped from assignments
   expect_false("group_id" %in% names(out$assignments))
+  # sequence and zones tables are also updated
+  expect_equal(sort(unique(out$sequence$zone_id)),
+               c("PA_1.001", "PA_1.002", "PB_1.001", "PB_1.002"))
+  expect_equal(sort(unique(out$zones$zone_id)),
+               c("PA_1.001", "PA_1.002", "PB_1.001", "PB_1.002"))
+})
+
+test_that(".rename_zones respects zone_order when rows are unsorted", {
+  # Z1 row appears first but has zone_order=2; Z2 has zone_order=1
+  # Z2 (lowest zone_order in group) should get pos .001
+  plan <- structure(
+    list(
+      zones = tibble::tibble(
+        zone_id = c("Z1", "Z2"),
+        partition_id = "P1",
+        center_tract_id = c("C1", "C2"),
+        total_workload = 1, diameter = 0, n_tracts = 1L
+      ),
+      assignments = tibble::tibble(
+        tract_id = c("T1", "T2"),
+        zone_id  = c("Z1", "Z2"),
+        partition_id = "P1"
+      ),
+      zone_sequence = tibble::tibble(
+        partition_id = "P1",
+        zone_id      = c("Z1", "Z2"),   # rows are Z1 then Z2
+        zone_order   = c(2L, 1L),        # but Z2 has the lower zone_order
+        group_id     = c(1L, 1L)
+      ),
+      sequence = tibble::tibble(
+        zone_id = c("Z1", "Z2"), tract_id = c("T1", "T2"), visit_order = 1L
+      ),
+      parameters = list(), diagnostics = list()
+    ),
+    class = "surveyzones_plan"
+  )
+
+  out <- surveyzones:::.rename_zones(plan)
+
+  # T2 belongs to Z2 (zone_order=1) -> must be in zone P1_1.001
+  # T1 belongs to Z1 (zone_order=2) -> must be in zone P1_1.002
+  expect_equal(out$sequence$zone_id[out$sequence$tract_id == "T2"], "P1_1.001")
+  expect_equal(out$sequence$zone_id[out$sequence$tract_id == "T1"], "P1_1.002")
 })
