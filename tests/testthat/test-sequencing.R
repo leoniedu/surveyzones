@@ -704,3 +704,94 @@ test_that("custom NN control works when passed explicitly", {
   expect_equal(sort(result), sort(ids))
   expect_equal(length(result), 4)
 })
+
+# ── .rename_zones ──────────────────────────────────────────────────────────────
+
+test_that(".rename_zones produces correct ID format", {
+  plan <- structure(
+    list(
+      zones = tibble::tibble(
+        zone_id = c("Z1", "Z2", "Z3"),
+        partition_id = "P1",
+        center_tract_id = c("C1", "C2", "C3"),
+        total_workload = 1, diameter = 0, n_tracts = 1L
+      ),
+      assignments = tibble::tibble(
+        tract_id = c("T1", "T2", "T3"),
+        zone_id  = c("Z1", "Z2", "Z3"),
+        partition_id = "P1"
+      ),
+      zone_sequence = tibble::tibble(
+        partition_id = "P1",
+        zone_id      = c("Z1", "Z2", "Z3"),
+        zone_order   = 1:3,
+        group_id     = c(1L, 1L, 2L)   # Z1+Z2 in group 1, Z3 in group 2
+      ),
+      sequence = tibble::tibble(
+        zone_id     = c("Z1", "Z2", "Z3"),
+        tract_id    = c("T1", "T2", "T3"),
+        visit_order = 1L
+      ),
+      parameters = list(), diagnostics = list()
+    ),
+    class = "surveyzones_plan"
+  )
+
+  out <- surveyzones:::.rename_zones(plan)
+
+  # zone_sequence uses new IDs
+  expect_equal(sort(out$zone_sequence$zone_id), c("P1_1.001", "P1_1.002", "P1_2.001"))
+  # assignments uses new IDs
+  expect_equal(sort(out$assignments$zone_id), c("P1_1.001", "P1_1.002", "P1_2.001"))
+  # zones uses new IDs
+  expect_equal(sort(out$zones$zone_id), c("P1_1.001", "P1_1.002", "P1_2.001"))
+  # sequence uses new IDs
+  expect_equal(sort(out$sequence$zone_id), c("P1_1.001", "P1_1.002", "P1_2.001"))
+  # group_id dropped from assignments
+  expect_false("group_id" %in% names(out$assignments))
+  # center_tract_id preserved in zones
+  expect_true("center_tract_id" %in% names(out$zones))
+})
+
+test_that(".rename_zones works across two partitions", {
+  plan <- structure(
+    list(
+      zones = tibble::tibble(
+        zone_id = c("Z1", "Z2", "Z3", "Z4"),
+        partition_id = c("PA", "PA", "PB", "PB"),
+        center_tract_id = paste0("C", 1:4),
+        total_workload = 1, diameter = 0, n_tracts = 1L
+      ),
+      assignments = tibble::tibble(
+        tract_id     = paste0("T", 1:4),
+        zone_id      = c("Z1", "Z2", "Z3", "Z4"),
+        partition_id = c("PA", "PA", "PB", "PB"),
+        group_id     = c("g1", "g1", "g2", "g2")  # char group_id to drop
+      ),
+      zone_sequence = tibble::tibble(
+        partition_id = c("PA", "PA", "PB", "PB"),
+        zone_id      = c("Z1", "Z2", "Z3", "Z4"),
+        zone_order   = c(1L, 2L, 1L, 2L),
+        group_id     = c(1L, 1L, 1L, 1L)
+      ),
+      sequence = tibble::tibble(
+        zone_id     = c("Z1", "Z2", "Z3", "Z4"),
+        tract_id    = paste0("T", 1:4),
+        visit_order = 1L
+      ),
+      parameters = list(), diagnostics = list()
+    ),
+    class = "surveyzones_plan"
+  )
+
+  out <- surveyzones:::.rename_zones(plan)
+
+  pa_ids <- sort(out$zone_sequence$zone_id[out$zone_sequence$partition_id == "PA"])
+  pb_ids <- sort(out$zone_sequence$zone_id[out$zone_sequence$partition_id == "PB"])
+  expect_equal(pa_ids, c("PA_1.001", "PA_1.002"))
+  expect_equal(pb_ids, c("PB_1.001", "PB_1.002"))
+  # IDs are globally unique
+  expect_equal(length(unique(out$zone_sequence$zone_id)), 4L)
+  # group_id dropped from assignments
+  expect_false("group_id" %in% names(out$assignments))
+})
