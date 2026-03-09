@@ -246,12 +246,13 @@ surveyzones_sequence <- function(
 }
 
 
-#' Rename zone IDs to sequential {partition_id}_{group}.{pos:003d} format
+#' Rename zone IDs to sequential {partition_id}_{group_id}.{pos} format
 #'
 #' Applied at the end of [surveyzones_sequence()] after zone_sequence is
 #' computed.  Builds an old->new lookup and applies it to all four plan tables.
-#' Also drops `group_id` from `assignments` (character phase-1 group, now
-#' redundant with `zones$center_tract_id`).
+#' Also drops `group_id` from `assignments` (character phase-1 center tract ID,
+#' redundant with `zones$center_tract_id`). Note: `zone_sequence$group_id` (integer
+#' travel-group counter) is used in the new ID format — these are different columns.
 #'
 #' @param plan A `surveyzones_plan` with `zone_sequence` already set.
 #' @return The plan with renamed zone_ids in all four tables.
@@ -261,7 +262,7 @@ surveyzones_sequence <- function(
   lookup <- plan$zone_sequence |>
     dplyr::arrange(.data$partition_id, .data$group_id, .data$zone_order) |>
     dplyr::mutate(
-      pos = dplyr::row_number(),
+      pos = rank(.data$zone_order, ties.method = "first"),
       .by = c("partition_id", "group_id")
     ) |>
     dplyr::mutate(
@@ -274,6 +275,15 @@ surveyzones_sequence <- function(
     dplyr::select("zone_id", "new_zone_id")
 
   id_map <- stats::setNames(lookup$new_zone_id, lookup$zone_id)
+
+  missing <- setdiff(
+    c(plan$zone_sequence$zone_id, plan$zones$zone_id,
+      plan$assignments$zone_id, plan$sequence$zone_id),
+    names(id_map)
+  )
+  if (length(missing) > 0) {
+    cli::cli_abort("zone_ids not found in lookup: {.val {missing}}")
+  }
 
   # Apply to all four tables
   plan$zone_sequence$zone_id <- unname(id_map[plan$zone_sequence$zone_id])
