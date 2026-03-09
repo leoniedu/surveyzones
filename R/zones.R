@@ -191,7 +191,7 @@ utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tra
 #'   Set to `FALSE` to force re-computation.
 #' @param access_points Optional sf object with POINT geometries and a
 #'   `tract_id` column.  Stored in the returned plan so that downstream
-#'   functions like [surveyzones_sequence_zones()] can use it without
+#'   functions like [surveyzones_sequence()] can use it without
 #'   the caller having to pass it again.
 #'
 #' @return A `surveyzones_plan` object.

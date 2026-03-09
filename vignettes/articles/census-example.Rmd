@@ -223,12 +223,8 @@ between zones** (which zone to visit first, second, etc.), then the **visit
 order of tracts within each zone**.
 
 ```{r sequence}
-# Zone visit order via flood-fill + TSP on min pairwise tract distances
+# Zone + tract sequencing in one call
 # (access_points for haversine fill-in are pulled from the plan)
-plan_partition <- surveyzones_sequence_zones(plan_partition, distances)
-plan_no_partition <- surveyzones_sequence_zones(plan_no_partition, distances)
-
-# Tract visit order within each zone
 plan_partition <- surveyzones_sequence(plan_partition, distances)
 plan_no_partition <- surveyzones_sequence(plan_no_partition, distances)
 ```

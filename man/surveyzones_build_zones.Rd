@@ -85,7 +85,7 @@ Set to \code{FALSE} to force re-computation.}
 
 \item{access_points}{Optional sf object with POINT geometries and a
 \code{tract_id} column.  Stored in the returned plan so that downstream
-functions like \code{\link[=surveyzones_sequence_zones]{surveyzones_sequence_zones()}} can use it without
+functions like \code{\link[=surveyzones_sequence]{surveyzones_sequence()}} can use it without
 the caller having to pass it again.}
 }
 \value{

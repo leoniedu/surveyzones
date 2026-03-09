@@ -2,9 +2,19 @@
 % Please edit documentation in R/sequencing.R
 \name{surveyzones_sequence}
 \alias{surveyzones_sequence}
-\title{Sequence All Zones in a Plan}
+\title{Sequence Zones and Tracts in a Plan}
 \usage{
-surveyzones_sequence(plan, sparse_distances, method = "TSP", control = NULL)
+surveyzones_sequence(
+  plan,
+  sparse_distances,
+  method = "TSP",
+  control = NULL,
+  access_points = NULL,
+  speed_kmh = 0.1,
+  complete_distances = TRUE,
+  threshold = 10,
+  by_partition = TRUE
+)
 }
 \arguments{
 \item{plan}{A \code{surveyzones_plan} object.}
@@ -13,6 +23,7 @@ surveyzones_sequence(plan, sparse_distances, method = "TSP", control = NULL)
 \code{\link[=surveyzones_compute_sparse_distances]{surveyzones_compute_sparse_distances()}}).}
 
 \item{method}{Character scalar passed to \code{\link[seriation:seriate]{seriation::seriate()}}
+for tract-level ordering
 (e.g., \code{"TSP"}, \code{"SPIN_NH"}, \code{"Spectral"}, \code{"OLO"}).
 Default \code{"TSP"}.}
 
@@ -20,11 +31,42 @@ Default \code{"TSP"}.}
 \code{\link[seriation:seriate]{seriation::seriate()}}.  For example,
 \code{control = list(sigma = c(10, 7, 5, 3), step = 10)} for \code{"SPIN_NH"}.
 Default \code{NULL}.}
+
+\item{access_points}{An sf object with POINT geometries and a
+\code{tract_id} column.  Used to fill missing pairwise distances via
+haversine (\code{\link[=surveyzones_complete_distances]{surveyzones_complete_distances()}}) so that every
+cross-zone tract pair has a distance.
+Defaults to \code{plan$access_points} when \code{NULL}.  Required when
+\code{complete_distances = TRUE}.}
+
+\item{speed_kmh}{Numeric scalar.  Assumed travel speed for haversine
+fill-in (km/h).  Default \code{0.1} — intentionally harsh because missing
+pairs likely represent real barriers (rivers, mountains).}
+
+\item{complete_distances}{Logical scalar.  When \code{TRUE} (default),
+missing pairwise distances are filled using haversine via
+\code{\link[=surveyzones_complete_distances]{surveyzones_complete_distances()}}.  Set to \code{FALSE} to skip
+imputation (e.g., when distances are already complete).}
+
+\item{threshold}{Numeric scalar.  Maximum consecutive distance (in the
+same units as \code{sparse_distances}, typically minutes) between two zones
+in the TSP path before starting a new group.  Default \code{10}.}
+
+\item{by_partition}{Logical scalar.  When \code{TRUE} (default), zones are
+sequenced independently within each partition.  When \code{FALSE}, all zones
+are sequenced together ignoring partition boundaries.}
 }
 \value{
-The same \code{plan} with \code{plan$sequence} populated — a tibble
-with columns \code{zone_id}, \code{tract_id}, \code{visit_order}.
+The same \code{plan} with two new components:
+\itemize{
+\item \code{plan$zone_sequence}: tibble with \code{partition_id}, \code{zone_id},
+\code{zone_order}, \code{group_id}.
+\item \code{plan$sequence}: tibble with \code{zone_id}, \code{tract_id}, \code{visit_order}.
+}
 }
 \description{
-Computes a visit order for every zone's tracts.
+Computes a spatial visit order at two levels: (1) zones within each
+partition via TSP on minimum pairwise tract distances, and (2) tracts
+within each zone via seriation.  Tract sequences are oriented so that
+each zone's entry tract is closest to the previous zone's exit tract.
 }

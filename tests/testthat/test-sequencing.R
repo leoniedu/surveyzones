@@ -25,10 +25,11 @@ test_that("sequencing returns a permutation of zone tracts", {
     enforce_partition = FALSE
   )
 
-  # Sequence
-  plan <- surveyzones_sequence(plan, dists)
+  # Sequence (zones + tracts in one call)
+  plan <- surveyzones_sequence(plan, dists, complete_distances = FALSE)
 
   expect_false(is.null(plan$sequence))
+  expect_false(is.null(plan$zone_sequence))
   expect_true(all(c("zone_id", "tract_id", "visit_order") %in%
                     names(plan$sequence)))
 
@@ -114,7 +115,9 @@ test_that("zone sequencing produces correct zone_order for line topology", {
     class = "surveyzones_plan"
   )
 
-  plan <- surveyzones_sequence_zones(plan, pairs, pts, threshold = 100)
+  plan <- surveyzones_sequence(
+    plan, pairs, threshold = 100, complete_distances = FALSE
+  )
 
   expect_false(is.null(plan$zone_sequence))
   expect_true("zone_order" %in% names(plan$zone_sequence))
@@ -129,6 +132,10 @@ test_that("zone sequencing produces correct zone_order for line topology", {
   zone_nums <- as.integer(gsub("Z", "", ordered_zones))
   diffs <- diff(zone_nums)
   expect_true(all(diffs > 0) || all(diffs < 0))
+
+  # Tract sequence should also exist
+  expect_false(is.null(plan$sequence))
+  expect_equal(nrow(plan$sequence), 4)
 })
 
 test_that("seriation handles single-zone partition", {
@@ -164,8 +171,9 @@ test_that("seriation handles single-zone partition", {
     distance = numeric(0)
   )
 
-  plan <- surveyzones_sequence_zones(plan, pairs, pts)
+  plan <- surveyzones_sequence(plan, pairs, complete_distances = FALSE)
   expect_equal(plan$zone_sequence$zone_order, 1L)
+  expect_equal(plan$sequence$visit_order, 1L)
 })
 
 test_that("Spectral tract sequencing produces correct visit_order", {
@@ -196,7 +204,9 @@ test_that("Spectral tract sequencing produces correct visit_order", {
     class = "surveyzones_plan"
   )
 
-  plan <- surveyzones_sequence(plan, pairs, method = "Spectral")
+  plan <- surveyzones_sequence(
+    plan, pairs, method = "Spectral", complete_distances = FALSE
+  )
 
   expect_false(is.null(plan$sequence))
   expect_true("visit_order" %in% names(plan$sequence))
@@ -235,7 +245,9 @@ test_that("seriation handles single-tract zone", {
     distance = numeric(0)
   )
 
-  plan <- surveyzones_sequence(plan, pairs, method = "Spectral")
+  plan <- surveyzones_sequence(
+    plan, pairs, method = "Spectral", complete_distances = FALSE
+  )
   expect_equal(plan$sequence$visit_order, 1L)
 })
 
@@ -280,7 +292,7 @@ test_that("zone sequencing completes incomplete distances via haversine", {
   )
 
   # Should succeed — missing pairs filled via haversine
-  plan <- surveyzones_sequence_zones(plan, incomplete_pairs, pts)
+  plan <- surveyzones_sequence(plan, incomplete_pairs, access_points = pts)
   expect_false(is.null(plan$zone_sequence))
   expect_equal(nrow(plan$zone_sequence), 3)
   expect_equal(sort(plan$zone_sequence$zone_order), 1:3)
@@ -329,8 +341,9 @@ test_that("by_partition = FALSE sequences all zones together", {
     class = "surveyzones_plan"
   )
 
-  plan <- surveyzones_sequence_zones(
-    plan, pairs, pts, threshold = 100, by_partition = FALSE
+  plan <- surveyzones_sequence(
+    plan, pairs, threshold = 100, by_partition = FALSE,
+    complete_distances = FALSE
   )
 
   expect_false(is.null(plan$zone_sequence))
@@ -423,7 +436,7 @@ test_that(".build_zone_dist_matrix has no Inf when distances are complete", {
   expect_equal(mat, t(mat))
 })
 
-test_that("sequence_zones uses min pairwise distances, not center-to-center", {
+test_that("sequence uses min pairwise distances, not center-to-center", {
   # Z1 center at C1 (far left), Z2 center at C4 (far right)
   # But Z1 contains T2 (near right) and Z2 contains T3 (near left)
   # So min-pairwise(Z1,Z2) = d(T2,T3) which is small
@@ -477,9 +490,8 @@ test_that("sequence_zones uses min pairwise distances, not center-to-center", {
     class = "surveyzones_plan"
   )
 
-  plan <- surveyzones_sequence_zones(
-    plan, pairs, pts,
-    threshold = 100, complete_distances = FALSE
+  plan <- surveyzones_sequence(
+    plan, pairs, threshold = 100, complete_distances = FALSE
   )
 
   # Z1 and Z2 should be adjacent in the ordering (min pairwise = 1)
@@ -538,8 +550,8 @@ test_that("zone sequencing groups zones by threshold (gap-based)", {
     class = "surveyzones_plan"
   )
 
-  plan <- surveyzones_sequence_zones(
-    plan, pairs, pts, threshold = 10, complete_distances = FALSE
+  plan <- surveyzones_sequence(
+    plan, pairs, threshold = 10, complete_distances = FALSE
   )
 
   ordered <- plan$zone_sequence |> dplyr::arrange(zone_order)
@@ -567,69 +579,66 @@ test_that("zone sequencing groups zones by threshold (gap-based)", {
   expect_false(cluster1_groups == cluster2_groups)
 })
 
-test_that(".orient_tract_sequences reverses tracts when exit is closer to last", {
-  # Zone A has tracts T1 -> T2 -> T3 (visit_order 1,2,3)
-  # Zone B has tracts T4 -> T5 -> T6 (visit_order 1,2,3)
-  # Exit of zone A = T3, entry of zone B = T4, end of zone B = T6
-  # If T3 is closer to T6 than T4, zone B should be reversed
-  sequence <- tibble::tibble(
-    zone_id  = c(rep("ZA", 3), rep("ZB", 3)),
-    tract_id = c("T1", "T2", "T3", "T4", "T5", "T6"),
-    visit_order = c(1L, 2L, 3L, 1L, 2L, 3L)
-  )
-
-  zone_sequence <- tibble::tibble(
-    partition_id = "P1",
+test_that("tract orientation reverses when exit is closer to last tract", {
+  # Zone A: tracts T1, T2, T3 on a line (positions 0, 1, 2)
+  # Zone B: tracts T4, T5, T6 on a line (positions 10, 11, 12)
+  # Zone A exit = T3 (position 2). T4 is at 10, T6 is at 12.
+  # T3 → T4 = 8, T3 → T6 = 10: entry (T4) is closer → no reversal.
+  #
+  # Now flip Zone B positions: T4=12, T5=11, T6=10
+  # T3 → T4 = 10, T3 → T6 = 8: last (T6) is closer → should reverse.
+  zones_tbl <- tibble::tibble(
     zone_id = c("ZA", "ZB"),
-    zone_order = 1:2,
-    group_id = c(1L, 1L)
-  )
-
-  # T3 -> T4 = 10, T3 -> T6 = 2 (closer to last, should reverse)
-  sparse_distances <- tibble::tibble(
-    origin_id      = c("T3", "T3"),
-    destination_id = c("T4", "T6"),
-    distance       = c(10,   2)
-  )
-
-  result <- surveyzones:::.orient_tract_sequences(
-    sequence, zone_sequence, sparse_distances
-  )
-
-  zb <- result |> dplyr::filter(zone_id == "ZB") |> dplyr::arrange(visit_order)
-  # After reversal: T6 should be first (visit_order 1), T4 last (visit_order 3)
-  expect_equal(zb$tract_id, c("T6", "T5", "T4"))
-
-  # Zone A should be unchanged
-  za <- result |> dplyr::filter(zone_id == "ZA") |> dplyr::arrange(visit_order)
-  expect_equal(za$tract_id, c("T1", "T2", "T3"))
-})
-
-test_that(".orient_tract_sequences does not reverse when entry is already closer", {
-  sequence <- tibble::tibble(
-    zone_id  = c(rep("ZA", 3), rep("ZB", 3)),
-    tract_id = c("T1", "T2", "T3", "T4", "T5", "T6"),
-    visit_order = c(1L, 2L, 3L, 1L, 2L, 3L)
-  )
-
-  zone_sequence <- tibble::tibble(
     partition_id = "P1",
-    zone_id = c("ZA", "ZB"),
-    zone_order = 1:2,
-    group_id = c(1L, 1L)
+    center_tract_id = c("T1", "T4"),
+    total_workload = 3,
+    diameter = 2,
+    n_tracts = 3L
   )
 
-  # T3 -> T4 = 2 (closer to first, no reversal), T3 -> T6 = 10
-  sparse_distances <- tibble::tibble(
-    origin_id      = c("T3", "T3"),
-    destination_id = c("T4", "T6"),
-    distance       = c(2,   10)
+  # Positions: T1=0, T2=1, T3=2, T4=12, T5=11, T6=10
+  positions <- c(T1 = 0, T2 = 1, T3 = 2, T4 = 12, T5 = 11, T6 = 10)
+  ids <- names(positions)
+  pairs <- tidyr::expand_grid(origin_id = ids, destination_id = ids) |>
+    dplyr::filter(origin_id != destination_id) |>
+    dplyr::mutate(
+      distance = abs(positions[origin_id] - positions[destination_id])
+    )
+
+  plan <- structure(
+    list(
+      zones = zones_tbl,
+      assignments = tibble::tibble(
+        tract_id = ids,
+        zone_id = c("ZA", "ZA", "ZA", "ZB", "ZB", "ZB"),
+        partition_id = "P1"
+      ),
+      zone_sequence = NULL, sequence = NULL,
+      parameters = list(), diagnostics = list()
+    ),
+    class = "surveyzones_plan"
   )
 
-  result <- surveyzones:::.orient_tract_sequences(
-    sequence, zone_sequence, sparse_distances
+  plan <- surveyzones_sequence(
+    plan, pairs, threshold = 100, complete_distances = FALSE
   )
 
-  zb <- result |> dplyr::filter(zone_id == "ZB") |> dplyr::arrange(visit_order)
-  expect_equal(zb$tract_id, c("T4", "T5", "T6"))
+  # Zone A's tracts should be in order T1-T2-T3 (or reversed)
+  za <- plan$sequence |>
+    dplyr::filter(zone_id == "ZA") |>
+    dplyr::arrange(visit_order)
+
+  # Zone B's tracts: TSP on {T4(12), T5(11), T6(10)} gives T4-T5-T6 or T6-T5-T4.
+  # After orientation, entry should be T6 (closest to ZA's exit at position 2):
+  # T6(10) is closer to T3(2) than T4(12) is.
+  zb <- plan$sequence |>
+    dplyr::filter(zone_id == "ZB") |>
+    dplyr::arrange(visit_order)
+
+  # The first tract of ZB should be T6 (position 10, closer to ZA exit)
+  # regardless of which direction TSP chose
+  za_exit_pos <- positions[za$tract_id[nrow(za)]]
+  zb_first_pos <- positions[zb$tract_id[1]]
+  zb_last_pos <- positions[zb$tract_id[nrow(zb)]]
+  expect_true(abs(zb_first_pos - za_exit_pos) <= abs(zb_last_pos - za_exit_pos))
 })
