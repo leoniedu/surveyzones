@@ -31,9 +31,6 @@
 #'   missing pairwise distances are filled using haversine via
 #'   [surveyzones_complete_distances()].  Set to `FALSE` to skip
 #'   imputation (e.g., when distances are already complete).
-#' @param threshold Numeric scalar.  Maximum consecutive distance (in the
-#'   same units as `sparse_distances`, typically minutes) between two zones
-#'   in the TSP path before starting a new group.  Default `10`.
 #' @param by_partition Logical scalar.  When `TRUE` (default), zones are
 #'   sequenced independently within each partition.  When `FALSE`, all zones
 #'   are sequenced together ignoring partition boundaries.
@@ -52,7 +49,6 @@ surveyzones_sequence <- function(
   access_points = NULL,
   speed_kmh = 0.1,
   complete_distances = TRUE,
-  threshold = 10,
   by_partition = TRUE
 ) {
   if (!inherits(plan, "surveyzones_plan")) {
@@ -75,7 +71,7 @@ surveyzones_sequence <- function(
   }
 
   plan$zone_sequence <- .sequence_zones(
-    plan, sparse_distances, control, threshold, by_partition
+    plan, sparse_distances, control, by_partition
   )
 
   plan$sequence <- .sequence_tracts_with_orientation(
@@ -89,35 +85,35 @@ surveyzones_sequence <- function(
 #' Sequence Zones Within Partitions
 #'
 #' TSP-seriates zones using min-pairwise tract distances, then splits
-#' at gaps exceeding `threshold`.
+#' using the solver-defined groups.
 #'
 #' @param plan A `surveyzones_plan` object.
 #' @param sparse_distances Sparse distance tibble.
 #' @param control Control list passed to [seriation::seriate()].
-#' @param threshold Gap threshold for group splitting.
 #' @param by_partition Whether to sequence within partitions.
 #'
 #' @return Tibble with `partition_id`, `zone_id`, `zone_order`, `group_id`.
 #' @keywords internal
-.sequence_zones <- function(plan, sparse_distances, control, threshold,
-                            by_partition) {
-  group_col <- if (by_partition) "partition_id" else ".group"
+.sequence_zones <- function(plan, sparse_distances, control, by_partition) {
   zones <- plan$zones
+
+  # Save original partition_id for output
+  zone_lookup <- zones |> dplyr::select("zone_id", orig_partition = "partition_id")
+
+  # When by_partition = FALSE, treat all zones as one partition
   if (!by_partition) {
-    zones <- dplyr::mutate(zones, .group = "all")
+    zones$partition_id <- "all"
   }
 
-  zone_lookup <- plan$zones |>
-    dplyr::select("zone_id", "partition_id")
-
-  result <- zones |>
-    tidyr::nest(data = -dplyr::all_of(group_col)) |>
+  # Step 1: Order zones within each (partition_id, group_id) using TSP
+  within_group <- zones |>
+    tidyr::nest(data = -dplyr::all_of(c("partition_id", "group_id"))) |>
     dplyr::mutate(
       ordered = purrr::map(data, \(z) {
         zone_ids <- z$zone_id
         n <- length(zone_ids)
         if (n <= 1) {
-          return(tibble::tibble(zone_id = zone_ids, group_id = 1L))
+          return(tibble::tibble(zone_id = zone_ids, within_order = 1L))
         }
 
         mat <- .build_zone_dist_matrix(
@@ -128,28 +124,58 @@ surveyzones_sequence <- function(
                               control = control)
         ordered_ids <- zone_ids[seriation::get_order(o)]
 
-        consecutive_dists <- purrr::map_dbl(
-          seq_len(n - 1),
-          \(i) mat[ordered_ids[i], ordered_ids[i + 1]]
+        tibble::tibble(
+          zone_id = ordered_ids,
+          within_order = seq_along(ordered_ids)
         )
-        group_id <- c(1L, cumsum(consecutive_dists > threshold) + 1L)
-
-        tibble::tibble(zone_id = ordered_ids, group_id = group_id)
       })
     ) |>
     dplyr::select(-data) |>
-    tidyr::unnest(ordered) |>
+    tidyr::unnest(ordered)
+
+  # Step 2: Order groups within each partition using TSP on group medoids
+  # (pick first zone in each group as representative)
+  group_order <- within_group |>
+    dplyr::filter(.data$within_order == 1L) |>
+    tidyr::nest(gdata = -"partition_id") |>
+    dplyr::mutate(
+      gordered = purrr::map(gdata, \(g) {
+        group_ids <- g$group_id
+        rep_zone_ids <- g$zone_id
+        n <- length(group_ids)
+        if (n <= 1) {
+          return(tibble::tibble(group_id = group_ids, group_order = 1L))
+        }
+        mat <- .build_zone_dist_matrix(
+          rep_zone_ids, plan$assignments, sparse_distances
+        )
+        o <- .seriate_quietly(stats::as.dist(mat), method = "TSP",
+                              control = control)
+        tibble::tibble(
+          group_id = group_ids[seriation::get_order(o)],
+          group_order = seq_len(n)
+        )
+      })
+    ) |>
+    dplyr::select(-gdata) |>
+    tidyr::unnest(gordered)
+
+  # Step 3: Combine and compute global zone_order within partition
+  result <- within_group |>
+    dplyr::left_join(group_order, by = c("partition_id", "group_id")) |>
+    dplyr::arrange(.data$partition_id, .data$group_order, .data$within_order) |>
     dplyr::mutate(
       zone_order = dplyr::row_number(),
-      .by = dplyr::all_of(group_col)
-    )
+      .by = "partition_id"
+    ) |>
+    dplyr::select("partition_id", "zone_id", "zone_order", "group_id")
 
+  # Restore original partition_id when by_partition = FALSE
   if (!by_partition) {
     result <- result |>
-      dplyr::left_join(zone_lookup, by = dplyr::join_by(zone_id)) |>
-      dplyr::select("partition_id", "zone_id", "zone_order", "group_id")
-  } else {
-    result <- result |>
+      dplyr::select(-"partition_id") |>
+      dplyr::left_join(zone_lookup, by = "zone_id") |>
+      dplyr::rename(partition_id = "orig_partition") |>
       dplyr::select("partition_id", "zone_id", "zone_order", "group_id")
   }
 
@@ -258,17 +284,26 @@ surveyzones_sequence <- function(
 #' @return The plan with renamed zone_ids in all four tables.
 #' @keywords internal
 .rename_zones <- function(plan) {
-  # Build lookup: pos = rank within (partition_id, group_id) ordered by zone_order
+  # Build lookup: assign sequential group index within partition,
+  # then pos = rank within (partition_id, group_idx) ordered by zone_order
+  group_idx_lookup <- plan$zone_sequence |>
+    dplyr::distinct(.data$partition_id, .data$group_id) |>
+    dplyr::mutate(
+      group_idx = dplyr::row_number(),
+      .by = "partition_id"
+    )
+
   lookup <- plan$zone_sequence |>
-    dplyr::arrange(.data$partition_id, .data$group_id, .data$zone_order) |>
+    dplyr::left_join(group_idx_lookup, by = c("partition_id", "group_id")) |>
+    dplyr::arrange(.data$partition_id, .data$group_idx, .data$zone_order) |>
     dplyr::mutate(
       pos = rank(.data$zone_order, ties.method = "first"),
-      .by = c("partition_id", "group_id")
+      .by = c("partition_id", "group_idx")
     ) |>
     dplyr::mutate(
       new_zone_id = paste0(
         .data$partition_id, "_",
-        .data$group_id, ".",
+        .data$group_idx, ".",
         sprintf("%03d", .data$pos)
       )
     ) |>

@@ -12,7 +12,6 @@ surveyzones_sequence(
   access_points = NULL,
   speed_kmh = 0.1,
   complete_distances = TRUE,
-  threshold = 10,
   by_partition = TRUE
 )
 }
@@ -49,10 +48,6 @@ pairs likely represent real barriers (rivers, mountains).}
 missing pairwise distances are filled using haversine via
 \code{\link[=surveyzones_complete_distances]{surveyzones_complete_distances()}}.  Set to \code{FALSE} to skip
 imputation (e.g., when distances are already complete).}
-
-\item{threshold}{Numeric scalar.  Maximum consecutive distance (in the
-same units as \code{sparse_distances}, typically minutes) between two zones
-in the TSP path before starting a new group.  Default \code{10}.}
 
 \item{by_partition}{Logical scalar.  When \code{TRUE} (default), zones are
 sequenced independently within each partition.  When \code{FALSE}, all zones

@@ -263,7 +263,7 @@ test_that("cbc solver produces valid zones", {
   expect_equal(plan$parameters$solver, "cbc")
 })
 
-test_that("error when max_workload_per_zone is infinite", {
+test_that("uncapacitated mode (no max_workload) solves from K=1", {
   skip_if_not_installed("ROI.plugin.glpk")
   pts <- sf::st_as_sf(
     data.frame(
@@ -281,13 +281,15 @@ test_that("error when max_workload_per_zone is infinite", {
 
   dists <- surveyzones_compute_sparse_distances(pts)
 
-  expect_error(
-    surveyzones_build_zones(
-      sparse_distances = dists,
-      tracts = tracts,
-      D_max = 10,
-      enforce_partition = FALSE
-    ),
-    "max_workload_per_zone"
+  plan <- surveyzones_build_zones(
+    sparse_distances = dists,
+    tracts = tracts,
+    D_max = 10,
+    enforce_partition = FALSE
   )
+
+  expect_s3_class(plan, "surveyzones_plan")
+  # All tracts within D_max of each other → K=1
+  expect_equal(nrow(plan$zones), 1L)
+  expect_equal(sort(plan$assignments$tract_id), sort(tracts$tract_id))
 })

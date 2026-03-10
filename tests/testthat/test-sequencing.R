@@ -72,14 +72,15 @@ test_that("TSP seriation method parameter is passed through", {
 })
 
 test_that("zone sequencing produces correct zone_order for line topology", {
-  # 4 zones in a line: Z1--Z2--Z3--Z4, all within threshold
+  # 4 zones in a line: Z1--Z2--Z3--Z4
   zones_tbl <- tibble::tibble(
     zone_id = paste0("Z", 1:4),
     partition_id = "P1",
     center_tract_id = paste0("C", 1:4),
     total_workload = 1,
     diameter = 0,
-    n_tracts = 1L
+    n_tracts = 1L,
+    group_id = paste0("Z", 1:4)
   )
 
   ids <- paste0("C", 1:4)
@@ -107,7 +108,8 @@ test_that("zone sequencing produces correct zone_order for line topology", {
       assignments = tibble::tibble(
         tract_id = paste0("C", 1:4),
         zone_id = paste0("Z", 1:4),
-        partition_id = "P1"
+        partition_id = "P1",
+        group_id = paste0("Z", 1:4)
       ),
       zone_sequence = NULL, sequence = NULL,
       parameters = list(), diagnostics = list()
@@ -116,7 +118,7 @@ test_that("zone sequencing produces correct zone_order for line topology", {
   )
 
   plan <- surveyzones_sequence(
-    plan, pairs, threshold = 100, complete_distances = FALSE
+    plan, pairs, complete_distances = FALSE
   )
 
   expect_false(is.null(plan$zone_sequence))
@@ -148,7 +150,8 @@ test_that("seriation handles single-zone partition", {
     center_tract_id = "C1",
     total_workload = 1,
     diameter = 0,
-    n_tracts = 1L
+    n_tracts = 1L,
+    group_id = "Z1"
   )
 
   pts <- sf::st_as_sf(
@@ -160,7 +163,8 @@ test_that("seriation handles single-zone partition", {
     list(
       zones = zones_tbl,
       assignments = tibble::tibble(
-        tract_id = "C1", zone_id = "Z1", partition_id = "P1"
+        tract_id = "C1", zone_id = "Z1", partition_id = "P1",
+        group_id = "Z1"
       ),
       zone_sequence = NULL, sequence = NULL,
       parameters = list(), diagnostics = list()
@@ -196,10 +200,11 @@ test_that("Spectral tract sequencing produces correct visit_order", {
       zones = tibble::tibble(
         zone_id = "Z1", partition_id = "P1",
         center_tract_id = "T1", total_workload = 5,
-        diameter = 4, n_tracts = 5L
+        diameter = 4, n_tracts = 5L, group_id = "Z1"
       ),
       assignments = tibble::tibble(
-        tract_id = ids, zone_id = "Z1", partition_id = "P1"
+        tract_id = ids, zone_id = "Z1", partition_id = "P1",
+        group_id = "Z1"
       ),
       zone_sequence = NULL, sequence = NULL,
       parameters = list(), diagnostics = list()
@@ -231,10 +236,11 @@ test_that("seriation handles single-tract zone", {
       zones = tibble::tibble(
         zone_id = "Z1", partition_id = "P1",
         center_tract_id = "T1", total_workload = 1,
-        diameter = 0, n_tracts = 1L
+        diameter = 0, n_tracts = 1L, group_id = "Z1"
       ),
       assignments = tibble::tibble(
-        tract_id = "T1", zone_id = "Z1", partition_id = "P1"
+        tract_id = "T1", zone_id = "Z1", partition_id = "P1",
+        group_id = "Z1"
       ),
       zone_sequence = NULL, sequence = NULL,
       parameters = list(), diagnostics = list()
@@ -262,7 +268,8 @@ test_that("zone sequencing completes incomplete distances via haversine", {
     center_tract_id = paste0("C", 1:3),
     total_workload = 1,
     diameter = 0,
-    n_tracts = 1L
+    n_tracts = 1L,
+    group_id = paste0("Z", 1:3)
   )
 
   incomplete_pairs <- tibble::tibble(
@@ -277,7 +284,8 @@ test_that("zone sequencing completes incomplete distances via haversine", {
       assignments = tibble::tibble(
         tract_id = paste0("C", 1:3),
         zone_id = paste0("Z", 1:3),
-        partition_id = "P1"
+        partition_id = "P1",
+        group_id = paste0("Z", 1:3)
       ),
       zone_sequence = NULL, sequence = NULL,
       parameters = list(), diagnostics = list()
@@ -308,7 +316,8 @@ test_that("by_partition = FALSE sequences all zones together", {
     center_tract_id = paste0("C", 1:4),
     total_workload = 1,
     diameter = 0,
-    n_tracts = 1L
+    n_tracts = 1L,
+    group_id = paste0("Z", 1:4)
   )
 
   ids <- paste0("C", 1:4)
@@ -336,7 +345,8 @@ test_that("by_partition = FALSE sequences all zones together", {
       assignments = tibble::tibble(
         tract_id = paste0("C", 1:4),
         zone_id = paste0("Z", 1:4),
-        partition_id = c("P1", "P1", "P2", "P2")
+        partition_id = c("P1", "P1", "P2", "P2"),
+        group_id = paste0("Z", 1:4)
       ),
       zone_sequence = NULL, sequence = NULL,
       parameters = list(), diagnostics = list()
@@ -345,7 +355,7 @@ test_that("by_partition = FALSE sequences all zones together", {
   )
 
   plan <- surveyzones_sequence(
-    plan, pairs, threshold = 100, by_partition = FALSE,
+    plan, pairs, by_partition = FALSE,
     complete_distances = FALSE
   )
 
@@ -452,7 +462,8 @@ test_that("sequence uses min pairwise distances, not center-to-center", {
   assignments <- tibble::tibble(
     tract_id = c("C1", "T2", "T3", "C4", "C5", "T6"),
     zone_id = c("Z1", "Z1", "Z2", "Z2", "Z3", "Z3"),
-    partition_id = "P1"
+    partition_id = "P1",
+    group_id = c("Z1", "Z1", "Z2", "Z2", "Z3", "Z3")
   )
 
   zones_tbl <- tibble::tibble(
@@ -461,7 +472,8 @@ test_that("sequence uses min pairwise distances, not center-to-center", {
     center_tract_id = c("C1", "C4", "C5"),
     total_workload = 2,
     diameter = 1,
-    n_tracts = 2L
+    n_tracts = 2L,
+    group_id = c("Z1", "Z2", "Z3")
   )
 
   # All 6 tracts along a line: C1(0), T2(4), T3(5), C4(9), C5(15), T6(16)
@@ -494,7 +506,7 @@ test_that("sequence uses min pairwise distances, not center-to-center", {
   )
 
   plan <- surveyzones_sequence(
-    plan, pairs, threshold = 100, complete_distances = FALSE
+    plan, pairs, complete_distances = FALSE
   )
 
   # Z1 and Z2 should be adjacent in the ordering (min pairwise = 1)
@@ -512,16 +524,16 @@ test_that("sequence uses min pairwise distances, not center-to-center", {
   expect_equal(abs(z1_order - z2_order), 1)
 })
 
-test_that("zone sequencing groups zones by threshold (gap-based)", {
-  # 6 zones in two clusters: Z1-Z3 close together, Z4-Z6 close together
-  # Clusters are far apart (distance 50)
+test_that("zone sequencing respects solver-defined groups", {
+  # 6 zones in two solver-defined groups: G1={Z1,Z2,Z3}, G2={Z4,Z5,Z6}
   zones_tbl <- tibble::tibble(
     zone_id = paste0("Z", 1:6),
     partition_id = "P1",
     center_tract_id = paste0("C", 1:6),
     total_workload = 1,
     diameter = 0,
-    n_tracts = 1L
+    n_tracts = 1L,
+    group_id = rep(c("G1", "G2"), each = 3)
   )
 
   # C1(0), C2(2), C3(4), C4(54), C5(56), C6(58)
@@ -533,22 +545,14 @@ test_that("zone sequencing groups zones by threshold (gap-based)", {
       distance = abs(positions[origin_id] - positions[destination_id])
     )
 
-  pts <- sf::st_as_sf(
-    data.frame(
-      tract_id = ids,
-      lon = -38.50 - (positions / 10000),
-      lat = rep(-13.00, length(ids))
-    ),
-    coords = c("lon", "lat"), crs = 4326
-  )
-
   plan <- structure(
     list(
       zones = zones_tbl,
       assignments = tibble::tibble(
         tract_id = ids,
         zone_id = paste0("Z", 1:6),
-        partition_id = "P1"
+        partition_id = "P1",
+        group_id = rep(c("G1", "G2"), each = 3)
       ),
       zone_sequence = NULL, sequence = NULL,
       parameters = list(), diagnostics = list()
@@ -557,12 +561,12 @@ test_that("zone sequencing groups zones by threshold (gap-based)", {
   )
 
   plan <- surveyzones_sequence(
-    plan, pairs, threshold = 10, complete_distances = FALSE
+    plan, pairs, complete_distances = FALSE
   )
 
   ordered <- plan$zone_sequence |> dplyr::arrange(zone_order)
 
-  # Two distinct group_ids should exist (one per cluster)
+  # Two distinct group_ids should exist (one per solver group)
   groups <- sort(unique(ordered$group_id))
   expect_length(groups, 2)
 
@@ -593,7 +597,8 @@ test_that("tract orientation orients second zone's entry toward first zone's exi
     center_tract_id = c("T1", "T4"),
     total_workload = 3,
     diameter = 2,
-    n_tracts = 3L
+    n_tracts = 3L,
+    group_id = c("ZA", "ZB")
   )
 
   positions <- c(T1 = 0, T2 = 1, T3 = 2, T4 = 10, T5 = 11, T6 = 12)
@@ -610,7 +615,8 @@ test_that("tract orientation orients second zone's entry toward first zone's exi
       assignments = tibble::tibble(
         tract_id = ids,
         zone_id = c("ZA", "ZA", "ZA", "ZB", "ZB", "ZB"),
-        partition_id = "P1"
+        partition_id = "P1",
+        group_id = c("ZA", "ZA", "ZA", "ZB", "ZB", "ZB")
       ),
       zone_sequence = NULL, sequence = NULL,
       parameters = list(), diagnostics = list()
@@ -619,7 +625,7 @@ test_that("tract orientation orients second zone's entry toward first zone's exi
   )
 
   plan <- surveyzones_sequence(
-    plan, pairs, threshold = 100, complete_distances = FALSE
+    plan, pairs, complete_distances = FALSE
   )
 
   # Identify which zone is visited first and second
@@ -651,7 +657,8 @@ test_that("default TSP control produces valid zone ordering", {
     center_tract_id = paste0("C", 1:5),
     total_workload = 1,
     diameter = 0,
-    n_tracts = 1L
+    n_tracts = 1L,
+    group_id = paste0("Z", 1:5)
   )
 
   ids <- paste0("C", 1:5)
@@ -670,7 +677,8 @@ test_that("default TSP control produces valid zone ordering", {
       assignments = tibble::tibble(
         tract_id = ids,
         zone_id = paste0("Z", 1:5),
-        partition_id = "P1"
+        partition_id = "P1",
+        group_id = paste0("Z", 1:5)
       ),
       zone_sequence = NULL, sequence = NULL,
       parameters = list(), diagnostics = list()
@@ -680,7 +688,7 @@ test_that("default TSP control produces valid zone ordering", {
 
   # Default control = NULL (seriation's default TSP heuristic)
   plan <- surveyzones_sequence(
-    plan, pairs, threshold = 100, complete_distances = FALSE
+    plan, pairs, complete_distances = FALSE
   )
 
   ordered <- plan$zone_sequence |> dplyr::arrange(zone_order)

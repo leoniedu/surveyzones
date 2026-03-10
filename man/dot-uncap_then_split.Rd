@@ -8,6 +8,7 @@
   full_sparse_distances,
   tracts,
   K0,
+  K_max,
   D_max,
   max_workload_per_zone,
   candidates,
@@ -23,6 +24,8 @@
 \code{expected_service_time}.  Optionally \code{partition_id}.}
 
 \item{K0}{Integer. Initial number of zones (lower bound).}
+
+\item{K_max}{Integer. Safety cap on number of zones.}
 
 \item{D_max}{Numeric scalar.  Maximum distance.  Pairs in
 \code{sparse_distances} with \code{distance > D_max} are dropped

@@ -9,7 +9,6 @@ surveyzones_build_zones(
   tracts,
   D_max,
   max_workload_per_zone = Inf,
-  target_zone_size = NULL,
   K_max = NULL,
   enforce_partition = TRUE,
   candidates = NULL,
@@ -38,12 +37,6 @@ before solving.}
 \item{max_workload_per_zone}{Numeric scalar.  Upper bound on
 the sum of \code{expected_service_time} within any zone.  Defaults
 to \code{Inf} (uncapacitated).}
-
-\item{target_zone_size}{Numeric scalar or \code{NULL}.  Desired number
-of tracts per zone, used to compute the initial number of zones
-K as \code{ceiling(n_tracts / target_zone_size)}.  When both
-\code{target_zone_size} and a finite \code{max_workload_per_zone} are
-given, K is the maximum of the two implied values.}
 
 \item{K_max}{Integer.  Safety cap on the number of zones per
 partition.}

@@ -19,13 +19,6 @@ utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tra
   validate_tracts(tracts)
   validate_solver(solver)
 
-  if (is.infinite(max_workload_per_zone)) {
-    cli::cli_abort(c(
-      "A finite {.arg max_workload_per_zone} must be provided.",
-      "i" = "Without it, the number of zones K cannot be determined."
-    ))
-  }
-
   # Count distances before and after D_max filtering
   n_before <- nrow(sparse_distances)
   n_after <- nrow(sparse_distances |> dplyr::filter(distance <= D_max))
@@ -97,8 +90,8 @@ utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tra
   build_elapsed <- proc.time()[["elapsed"]] - build_t0
 
   # Extract and combine results using dplyr::bind_rows
-  assignments <- purrr::map_df(results, \(r) r$assignments)
-  zones <- purrr::map_df(results, \(r) r$zones)
+  assignments <- purrr::map(results, \(r) r$assignments) |> purrr::list_rbind()
+  zones <- purrr::map(results, \(r) r$zones) |> purrr::list_rbind()
 
   cli::cli_rule()
   cli::cli_alert_success(
@@ -342,7 +335,8 @@ surveyzones_build_zones_single <- function(
           zone_id = comp_ids,
           partition_id = NA_character_,
           center_id = comp_ids,
-          distance_to_center = 0
+          distance_to_center = 0,
+          group_id = comp_ids
         )
         all_comp_zones[[ci]] <- tibble::tibble(
           zone_id = comp_ids,
@@ -350,14 +344,14 @@ surveyzones_build_zones_single <- function(
           center_tract_id = comp_ids,
           total_workload = wl,
           diameter = 0,
-          n_tracts = 1L
+          n_tracts = 1L,
+          group_id = comp_ids
         )
         next
       }
 
       # Small-component shortcut: if the component's total workload fits in one
-      # zone, K=1 is the only feasible (and therefore optimal) solution.
-      # Pick the medoid as center and skip the solver entirely.
+      # zone AND all tracts are within D_max of the medoid, use K=1 directly.
       comp_wl <- sum(tracts$expected_service_time[tracts$tract_id %in% comp_ids])
       if (!is.infinite(max_workload_per_zone) && comp_wl <= max_workload_per_zone) {
         # Pre-filter to intra-component distances only (small table, fast lookup)
@@ -386,22 +380,27 @@ surveyzones_build_zones_single <- function(
           ]
           if (length(d) == 0L) NA_real_ else d[[1L]]
         })
-        all_comp_assignments[[ci]] <- tibble::tibble(
-          tract_id = comp_ids,
-          zone_id = center_id,
-          partition_id = NA_character_,
-          center_id = center_id,
-          distance_to_center = dist_to_ctr
-        )
-        all_comp_zones[[ci]] <- tibble::tibble(
-          zone_id = center_id,
-          partition_id = NA_character_,
-          center_tract_id = center_id,
-          total_workload = comp_wl,
-          diameter = if (nrow(comp_dists) > 0L) max(comp_dists$distance) else 0,
-          n_tracts = comp_n
-        )
-        next
+        # Only use shortcut if all tracts are within D_max of the center
+        if (all(!is.na(dist_to_ctr) & dist_to_ctr <= D_max)) {
+          all_comp_assignments[[ci]] <- tibble::tibble(
+            tract_id = comp_ids,
+            zone_id = center_id,
+            partition_id = NA_character_,
+            center_id = center_id,
+            distance_to_center = dist_to_ctr,
+            group_id = center_id
+          )
+          all_comp_zones[[ci]] <- tibble::tibble(
+            zone_id = center_id,
+            partition_id = NA_character_,
+            center_tract_id = center_id,
+            total_workload = comp_wl,
+            diameter = if (nrow(comp_dists) > 0L) max(comp_dists$distance) else 0,
+            n_tracts = comp_n,
+            group_id = center_id
+          )
+          next
+        }
       }
 
       cli::cli_alert_info("Component {ci}/{comp$no}: {comp_n} tracts")
@@ -463,6 +462,7 @@ surveyzones_build_zones_single <- function(
       full_sparse_distances = full_sparse_distances,
       tracts = tracts,
       K0 = K0,
+      K_max = K_max,
       D_max = D_max,
       max_workload_per_zone = max_workload_per_zone,
       candidates = candidates,
@@ -511,7 +511,8 @@ surveyzones_build_zones_single <- function(
       zone_id = character(0),
       partition_id = character(0),
       center_id = character(0),
-      distance_to_center = numeric(0)
+      distance_to_center = numeric(0),
+      group_id = character(0)
     ),
     zones = tibble::tibble(
       zone_id = character(0),
@@ -519,7 +520,8 @@ surveyzones_build_zones_single <- function(
       center_tract_id = character(0),
       total_workload = numeric(0),
       diameter = numeric(0),
-      n_tracts = integer(0)
+      n_tracts = integer(0),
+      group_id = character(0)
     ),
     diagnostics = list(
       solver_status = "infeasible",
@@ -719,7 +721,8 @@ surveyzones_solve_fixed_K <- function(
         zone_id = character(0),
         partition_id = character(0),
         center_id = character(0),
-        distance_to_center = numeric(0)
+        distance_to_center = numeric(0),
+        group_id = character(0)
       ),
       zones = tibble::tibble(
         zone_id = character(0),
@@ -727,7 +730,8 @@ surveyzones_solve_fixed_K <- function(
         center_tract_id = character(0),
         total_workload = numeric(0),
         diameter = numeric(0),
-        n_tracts = integer(0)
+        n_tracts = integer(0),
+        group_id = character(0)
       ),
       diagnostics = list(
         solver_status = "infeasible",
@@ -813,7 +817,8 @@ surveyzones_solve_fixed_K <- function(
         zone_id = character(0),
         partition_id = character(0),
         center_id = character(0),
-        distance_to_center = numeric(0)
+        distance_to_center = numeric(0),
+        group_id = character(0)
       ),
       zones = tibble::tibble(
         zone_id = character(0),
@@ -821,7 +826,8 @@ surveyzones_solve_fixed_K <- function(
         center_tract_id = character(0),
         total_workload = numeric(0),
         diameter = numeric(0),
-        n_tracts = integer(0)
+        n_tracts = integer(0),
+        group_id = character(0)
       ),
       diagnostics = list(
         solver_status = status,
@@ -849,12 +855,12 @@ surveyzones_solve_fixed_K <- function(
       assignments = tibble::tibble(
         tract_id = character(0), zone_id = character(0),
         partition_id = character(0), center_id = character(0),
-        distance_to_center = numeric(0)
+        distance_to_center = numeric(0), group_id = character(0)
       ),
       zones = tibble::tibble(
         zone_id = character(0), partition_id = character(0),
         center_tract_id = character(0), total_workload = numeric(0),
-        diameter = numeric(0), n_tracts = integer(0)
+        diameter = numeric(0), n_tracts = integer(0), group_id = character(0)
       ),
       diagnostics = list(
         solver_status = "infeasible",
@@ -901,9 +907,11 @@ surveyzones_solve_fixed_K <- function(
 
   list(
     assignments = assignments |>
-      dplyr::select(tract_id, zone_id, partition_id, center_id, distance_to_center),
+      dplyr::mutate(group_id = zone_id) |>
+      dplyr::select(tract_id, zone_id, partition_id, center_id, distance_to_center, group_id),
     zones = zones |>
-      dplyr::select(zone_id, partition_id, center_tract_id, total_workload, diameter, n_tracts),
+      dplyr::mutate(group_id = zone_id) |>
+      dplyr::select(zone_id, partition_id, center_tract_id, total_workload, diameter, n_tracts, group_id),
     diagnostics = list(
       solver_status = status,
       objective_value = ompr::objective_value(result),
@@ -923,6 +931,7 @@ surveyzones_solve_fixed_K <- function(
 #'
 #' @inheritParams surveyzones_build_zones
 #' @param K0 Integer. Initial number of zones (lower bound).
+#' @param K_max Integer. Safety cap on number of zones.
 #' @param candidates Character vector of candidate center tract_ids.
 #' @return A list with `assignments`, `zones`, and `diagnostics`.
 #' @keywords internal
@@ -930,6 +939,7 @@ surveyzones_solve_fixed_K <- function(
   full_sparse_distances,
   tracts,
   K0,
+  K_max,
   D_max,
   max_workload_per_zone,
   candidates,
@@ -942,26 +952,35 @@ surveyzones_solve_fixed_K <- function(
   start_time <- proc.time()[["elapsed"]]
 
   cli::cli_alert_info(
-    "Strategy: uncap_then_split \u2014 solving uncapacitated with K = {K0}, then splitting oversized zones"
+    "Strategy: uncap_then_split \u2014 solving uncapacitated from K = {K0} to K_max = {K_max}, then splitting oversized zones"
   )
 
-  # Phase 1: uncapacitated solve (fast)
-  uncap_result <- surveyzones_solve_fixed_K(
-    full_sparse_distances = full_sparse_distances,
-    tracts = tracts,
-    K = K0,
-    D_max = D_max,
-    max_workload_per_zone = Inf,
-    candidates = candidates,
-    max_variables = max_variables,
-    solver = solver,
-    max_time = max_time,
-    rel_tol = rel_tol,
-    verbose = verbose
-  )
+  # Phase 1: uncapacitated solve — increment K until feasible
+  uncap_result <- NULL
+  for (K in seq(K0, K_max)) {
+    cli::cli_alert("Trying uncapacitated K = {K}...")
+    uncap_result <- surveyzones_solve_fixed_K(
+      full_sparse_distances = full_sparse_distances,
+      tracts = tracts,
+      K = K,
+      D_max = D_max,
+      max_workload_per_zone = Inf,
+      candidates = candidates,
+      max_variables = max_variables,
+      solver = solver,
+      max_time = max_time,
+      rel_tol = rel_tol,
+      verbose = verbose
+    )
+    if (uncap_result$diagnostics$solver_status == "optimal") {
+      cli::cli_alert_success("Uncapacitated solve feasible at K = {K}")
+      break
+    }
+    cli::cli_alert_warning("Uncapacitated K = {K} failed (status: {uncap_result$diagnostics$solver_status})")
+  }
 
   if (uncap_result$diagnostics$solver_status != "optimal") {
-    cli::cli_alert_warning("Uncapacitated solve failed; falling back to direct capacitated MILP")
+    cli::cli_alert_danger("Uncapacitated solve failed for all K in {K0}..{K_max}")
     return(uncap_result)
   }
 
@@ -981,15 +1000,20 @@ surveyzones_solve_fixed_K <- function(
   n_over <- length(oversized)
   if (n_over == 0L) {
     cli::cli_alert_success("All zones satisfy the workload cap \u2014 no splitting needed")
+    # Each zone is its own group
+    uncap_result$assignments$group_id <- uncap_result$assignments$zone_id
+    uncap_result$zones$group_id <- uncap_result$zones$zone_id
     return(uncap_result)
   }
 
   cli::cli_alert_info("{n_over} oversized zone{?s} to split")
 
   good_assignments <- uncap_result$assignments |>
-    dplyr::filter(!.data$zone_id %in% oversized)
+    dplyr::filter(!.data$zone_id %in% oversized) |>
+    dplyr::mutate(group_id = .data$zone_id)
   good_zones <- uncap_result$zones |>
-    dplyr::filter(!.data$zone_id %in% oversized)
+    dplyr::filter(!.data$zone_id %in% oversized) |>
+    dplyr::mutate(group_id = .data$zone_id)
 
   split_assignments <- vector("list", n_over)
   split_zones <- vector("list", n_over)
@@ -1032,17 +1056,20 @@ surveyzones_solve_fixed_K <- function(
       cli::cli_alert_warning(
         "  Split of zone {zid} failed - keeping original oversized zone"
       )
-      good_assignments <- dplyr::bind_rows(
-        good_assignments,
-        uncap_result$assignments |> dplyr::filter(.data$zone_id == zid)
-      )
-      good_zones <- dplyr::bind_rows(
-        good_zones,
-        uncap_result$zones |> dplyr::filter(.data$zone_id == zid)
-      )
+      kept_asgn <- uncap_result$assignments |>
+        dplyr::filter(.data$zone_id == zid) |>
+        dplyr::mutate(group_id = zid)
+      kept_zones <- uncap_result$zones |>
+        dplyr::filter(.data$zone_id == zid) |>
+        dplyr::mutate(group_id = zid)
+      good_assignments <- dplyr::bind_rows(good_assignments, kept_asgn)
+      good_zones <- dplyr::bind_rows(good_zones, kept_zones)
     } else {
-      split_assignments[[idx]] <- sub_result$assignments
-      split_zones[[idx]] <- sub_result$zones
+      # Tag split sub-zones with parent phase-1 zone as group_id
+      split_assignments[[idx]] <- sub_result$assignments |>
+        dplyr::mutate(group_id = zid)
+      split_zones[[idx]] <- sub_result$zones |>
+        dplyr::mutate(group_id = zid)
     }
   }
 

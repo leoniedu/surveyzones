@@ -4,7 +4,7 @@
 \alias{.sequence_zones}
 \title{Sequence Zones Within Partitions}
 \usage{
-.sequence_zones(plan, sparse_distances, control, threshold, by_partition)
+.sequence_zones(plan, sparse_distances, control, by_partition)
 }
 \arguments{
 \item{plan}{A \code{surveyzones_plan} object.}
@@ -13,8 +13,6 @@
 
 \item{control}{Control list passed to \code{\link[seriation:seriate]{seriation::seriate()}}.}
 
-\item{threshold}{Gap threshold for group splitting.}
-
 \item{by_partition}{Whether to sequence within partitions.}
 }
 \value{
@@ -22,6 +20,6 @@ Tibble with \code{partition_id}, \code{zone_id}, \code{zone_order}, \code{group_
 }
 \description{
 TSP-seriates zones using min-pairwise tract distances, then splits
-at gaps exceeding \code{threshold}.
+using the solver-defined groups.
 }
 \keyword{internal}
