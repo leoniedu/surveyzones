@@ -124,11 +124,41 @@ The geographic reach constraint ($d_{ik} \leq D_{\max}$) is enforced in
 pre-processing: any $(i, k)$ pair with travel time exceeding $D_{\max}$ is
 excluded from the model, making $z_{ik}$ infeasible by construction.
 
-$K$ is discovered via a search loop: starting from a lower bound $K_{\min}$
-derived from workload and target zone size, $K$ is incremented until the MILP is
-feasible:
+### Automatic $K$ discovery and hierarchical structure
 
-$$K^* = \min \{ K \geq K_{\min} : \text{MILP feasible} \}$$
+The operative sizing parameter is `max_workload_per_zone` ($W_{\max}$): it
+defines how many tracts a team can serve and determines the actual size of
+zones. However, $K$ need not be derived directly from workload. The default
+strategy, `uncap_then_split`, decouples $K$-discovery from workload balancing
+by producing a **three-level hierarchy: travel groups → zones → tracts**.
+
+*Phase 1 (geographic grouping).* Solves the *uncapacitated* p-median---the
+formulation above without the workload constraint---starting from $K_0 = 1$
+and incrementing until all tracts can be assigned to centers within
+$D_{\max}$. Without capacity constraints the MILP has fewer variables and
+constraints, and convergence is fast because only geographic feasibility must
+be satisfied. Each resulting cluster defines a **travel group**
+(`group_id`)---a set of geographically cohesive tracts sharing the same
+phase-1 center.
+
+$$K^*_{\text{uncap}} = \min \{ K \geq 1 : \text{uncapacitated MILP feasible} \}$$
+
+*Phase 2 (workload splitting).* Any travel group whose total workload exceeds
+$W_{\max}$ is split into smaller **zones** by a single round of capacitated
+p-median restricted to that group. Each sub-problem is tiny and solved
+instantly. Groups already within capacity become single-zone groups. The
+parent group relationship is preserved via `group_id`, so all sub-zones of a
+split group share the same `group_id`.
+
+The travel group structure is exploited downstream: sequencing orders groups
+before zones, and zone IDs encode the hierarchy as
+`{partition}_{group}.{position}` (e.g., `33_1.001`, `33_1.002`).[^direct]
+
+[^direct]: An alternative `strategy = "direct"` solves the full capacitated
+p-median MILP directly, incrementing $K$ from a workload-derived lower bound
+$\lceil W_{\text{total}} / W_{\max} \rceil$ until a feasible solution is
+found. It does not produce the travel group hierarchy---each zone is its own
+group.
 
 This architecture combines minimum-$K$ search (inspired by LSCP), p-median's
 distance minimization, WLP's capacity constraints, and a novel $D_{\max}$
@@ -151,19 +181,34 @@ retained as feasible assignments. Disconnected components are identified and par
 constraints (e.g., by state) applied via `enforce_partition` are resolved. Each
 component of each (optional) partition is passed to Stage 3 as an independent sub-problem.
 
-**Stage 3 --- Minimum-$K$ search.** The lower bound
-$K_{\min} = \max(\lceil n / \text{target\_zone\_size} \rceil,\ \lceil W_{\text{total}} / W_{\max} \rceil)$
-is computed. For $K = K_{\min}, K_{\min}+1, \ldots$, the capacitated p-median
-MILP is solved with HiGHS (time limit `max_time`, gap tolerance `rel_tol`).
-The search returns the first $K$ for which the solver finds a solution within
-`rel_tol` of optimality.
+**Stage 3 --- Zone construction.** Executes the two-phase
+`uncap_then_split` strategy described above, producing travel groups and
+then splitting oversized groups into zones. Results are cached to disk by
+default (`use_cache = TRUE`): repeated calls with identical arguments
+return instantly without re-running the solver.
 
-**Stage 4 --- Sequencing.** Tracts within each zone are ordered by solving an
-asymmetric TSP, respecting road-network asymmetry. The zones themselves are then
-sequenced by solving a second ATSP (or nearest-neighbor approximation) over the
-$K$ zone centers, producing an optimal deployment order for supervisors or
-coordinators. Zone statistics (diameter, workload) are computed for diagnostic
-output.
+**Stage 4 --- Sequencing.** Performed via `surveyzones_sequence()` at three
+levels, exploiting the group → zone → tract hierarchy:
+
+1. **Group ordering** (within each partition): Groups are ordered via TSP on
+   the minimum pairwise tract distances between representative zones of each
+   group.
+
+2. **Zone ordering** (within each group): Zones are ordered via TSP on the
+   minimum pairwise tract distances between zones.
+
+3. **Tract ordering** (within each zone): Tracts are ordered via TSP. Tract
+   sequences are oriented so that each zone's entry tract is closest to the
+   previous zone's exit tract.
+
+Missing cross-zone distances are filled using haversine with a deliberately
+harsh speed penalty (`speed_kmh = 0.1`) to reflect real barriers (rivers,
+mountains).
+
+**Zone ID renaming.** At the end of sequencing, zone IDs are renamed to a
+hierarchical format: `{partition_id}_{group_index}.{position}` (e.g.,
+`33_1.001`, `33_1.002` for two zones in group 1 of partition 33). This makes
+the travel group structure immediately visible in the zone identifier.
 
 ## Conclusion
 
