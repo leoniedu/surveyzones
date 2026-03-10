@@ -6,7 +6,6 @@ utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tra
   tracts,
   D_max,
   max_workload_per_zone = Inf,
-  target_zone_size = NULL,
   K_max = NULL,
   enforce_partition = TRUE,
   candidates = NULL,
@@ -20,10 +19,10 @@ utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tra
   validate_tracts(tracts)
   validate_solver(solver)
 
-  if (is.null(target_zone_size) && is.infinite(max_workload_per_zone)) {
+  if (is.infinite(max_workload_per_zone)) {
     cli::cli_abort(c(
-      "Either {.arg target_zone_size} or a finite {.arg max_workload_per_zone} must be provided.",
-      "i" = "Without at least one, the number of zones K cannot be determined."
+      "A finite {.arg max_workload_per_zone} must be provided.",
+      "i" = "Without it, the number of zones K cannot be determined."
     ))
   }
 
@@ -35,9 +34,8 @@ utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tra
     "Input: {nrow(tracts)} tracts, {n_after} distance pairs (filtered from {n_before} by D_max = {D_max})"
   )
   workload_label <- if (is.infinite(max_workload_per_zone)) "Inf (uncapacitated)" else max_workload_per_zone
-  size_label <- target_zone_size %||% "NULL"
   cli::cli_alert_info(
-    "Parameters: D_max = {D_max}, max_workload = {workload_label}, target_zone_size = {size_label}, solver = {solver}"
+    "Parameters: D_max = {D_max}, max_workload = {workload_label}, solver = {solver}"
   )
 
   parts <- surveyzones_partition(tracts, enforce_partition)
@@ -74,7 +72,7 @@ utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tra
       tracts = part_tracts,
       D_max = D_max,
       max_workload_per_zone = max_workload_per_zone,
-      target_zone_size = target_zone_size,
+
       K_max = k_max_part,
       candidates = part_candidates,
       max_variables = max_variables,
@@ -118,7 +116,6 @@ utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tra
   parameters <- list(
     D_max = D_max,
     max_workload_per_zone = max_workload_per_zone,
-    target_zone_size = target_zone_size,
     K_max = K_max,
     enforce_partition = enforce_partition,
     solver = solver,
@@ -156,11 +153,6 @@ utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tra
 #' @param max_workload_per_zone Numeric scalar.  Upper bound on
 #'   the sum of `expected_service_time` within any zone.  Defaults
 #'   to `Inf` (uncapacitated).
-#' @param target_zone_size Numeric scalar or `NULL`.  Desired number
-#'   of tracts per zone, used to compute the initial number of zones
-#'   K as `ceiling(n_tracts / target_zone_size)`.  When both
-#'   `target_zone_size` and a finite `max_workload_per_zone` are
-#'   given, K is the maximum of the two implied values.
 #' @param K_max Integer.  Safety cap on the number of zones per
 #'   partition.
 #' @param enforce_partition Logical.  Whether to split by
@@ -202,7 +194,6 @@ surveyzones_build_zones <- function(
   tracts,
   D_max,
   max_workload_per_zone = Inf,
-  target_zone_size = NULL,
   K_max = NULL,
   enforce_partition = TRUE,
   candidates = NULL,
@@ -220,7 +211,6 @@ surveyzones_build_zones <- function(
     tracts                = tracts,
     D_max                 = D_max,
     max_workload_per_zone = max_workload_per_zone,
-    target_zone_size      = target_zone_size,
     K_max                 = K_max,
     enforce_partition     = enforce_partition,
     candidates            = candidates,
@@ -267,7 +257,6 @@ surveyzones_build_zones_single <- function(
   tracts,
   D_max,
   max_workload_per_zone = Inf,
-  target_zone_size = NULL,
   K_max,
   candidates,
   max_variables = 500000L,
@@ -280,22 +269,24 @@ surveyzones_build_zones_single <- function(
   n <- nrow(tracts)
   total_workload <- sum(tracts$expected_service_time)
 
-  # Compute initial K from target_zone_size and/or workload cap
-  K_from_size <- if (!is.null(target_zone_size)) {
-    ceiling(n / target_zone_size)
-  } else {
-    1L
-  }
-
-  K_from_workload <- if (is.finite(max_workload_per_zone)) {
-    ceiling(total_workload / max_workload_per_zone)
-  } else {
-    1L
-  }
-
-  K0 <- max(1L, K_from_size, K_from_workload)
-
   capacitated <- is.finite(max_workload_per_zone)
+
+  # Resolve effective strategy early so K0 can depend on it
+  effective_strategy <- if (strategy == "auto") {
+    if (capacitated) "uncap_then_split" else "direct"
+  } else {
+    strategy
+  }
+
+  # For uncap_then_split, start K0 = 1: the split phase handles capacity.
+  # K_from_workload assumes even distribution and overestimates K when
+  # population is clustered (e.g. bimodal).
+  # For "direct", use K_from_workload to skip obviously infeasible K values.
+  K0 <- if (effective_strategy == "direct" && capacitated) {
+    max(1L, ceiling(total_workload / max_workload_per_zone))
+  } else {
+    1L
+  }
   model_type <- if (capacitated) "capacitated" else "uncapacitated"
 
   cli::cli_alert_info(
@@ -427,7 +418,7 @@ surveyzones_build_zones_single <- function(
         tracts = comp_tracts,
         D_max = D_max,
         max_workload_per_zone = max_workload_per_zone,
-        target_zone_size = target_zone_size,
+  
         K_max = comp_K_max,
         candidates = comp_candidates,
         max_variables = max_variables,
@@ -467,13 +458,6 @@ surveyzones_build_zones_single <- function(
   # -- End component decomposition --------------------------------------------
 
   # -- uncap_then_split strategy ------------------------------------------------
-  # Resolve strategy: "auto" -> "uncap_then_split" when capacitated, else "direct"
-  effective_strategy <- if (strategy == "auto") {
-    if (capacitated) "uncap_then_split" else "direct"
-  } else {
-    strategy
-  }
-
   if (effective_strategy == "uncap_then_split" && capacitated) {
     return(.uncap_then_split(
       full_sparse_distances = full_sparse_distances,

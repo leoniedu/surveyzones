@@ -38,7 +38,7 @@ print.surveyzones_plan <- function(x, ...) {
   cli::cli_h1("surveyzones plan")
   cli::cli_bullets(c(
     "*" = "{n_partitions} partition{?s}, {n_tracts} tract{?s}, {n_zones} zone{?s}",
-    "*" = "D_max = {x$parameters$D_max}, max_workload = {if (is.infinite(x$parameters$max_workload_per_zone)) 'Inf' else x$parameters$max_workload_per_zone}{if (!is.null(x$parameters$target_zone_size)) paste0(', target_zone_size = ', x$parameters$target_zone_size) else ''}"
+    "*" = "D_max = {x$parameters$D_max}, max_workload = {if (is.infinite(x$parameters$max_workload_per_zone)) 'Inf' else x$parameters$max_workload_per_zone}"
   ))
 
   if (n_zones > 0) {

@@ -263,73 +263,7 @@ test_that("cbc solver produces valid zones", {
   expect_equal(plan$parameters$solver, "cbc")
 })
 
-test_that("target_zone_size determines K correctly", {
-  skip_if_not_installed("ROI.plugin.glpk")
-  pts <- sf::st_as_sf(
-    data.frame(
-      tract_id = sprintf("T%d", 1:6),
-      lon = c(-38.50, -38.501, -38.502, -38.503, -38.504, -38.505),
-      lat = c(-13.00, -13.001, -13.002, -13.003, -13.004, -13.005)
-    ),
-    coords = c("lon", "lat"), crs = 4326
-  )
-
-  tracts <- data.frame(
-    tract_id = sprintf("T%d", 1:6),
-    expected_service_time = rep(1, 6)
-  )
-
-  dists <- surveyzones_compute_sparse_distances(pts)
-
-  # target_zone_size = 2 -> K = ceil(6/2) = 3 zones
-  plan <- surveyzones_build_zones(
-    sparse_distances = dists,
-    tracts = tracts,
-    D_max = 10,
-    target_zone_size = 2,
-    enforce_partition = FALSE
-  )
-
-  expect_s3_class(plan, "surveyzones_plan")
-  expect_equal(nrow(plan$zones), 3L)
-  expect_equal(sort(plan$assignments$tract_id), sort(tracts$tract_id))
-  expect_equal(plan$parameters$target_zone_size, 2)
-})
-
-test_that("uncapacitated model skips workload constraints", {
-  skip_if_not_installed("ROI.plugin.glpk")
-  pts <- sf::st_as_sf(
-    data.frame(
-      tract_id = sprintf("T%d", 1:6),
-      lon = c(-38.50, -38.501, -38.502, -38.503, -38.504, -38.505),
-      lat = c(-13.00, -13.001, -13.002, -13.003, -13.004, -13.005)
-    ),
-    coords = c("lon", "lat"), crs = 4326
-  )
-
-  tracts <- data.frame(
-    tract_id = sprintf("T%d", 1:6),
-    expected_service_time = rep(1, 6)
-  )
-
-  dists <- surveyzones_compute_sparse_distances(pts)
-
-  # Uncapacitated: max_workload = Inf, target_zone_size = 3 -> K = 2
-  plan <- surveyzones_build_zones(
-    sparse_distances = dists,
-    tracts = tracts,
-    D_max = 10,
-    target_zone_size = 3,
-    enforce_partition = FALSE
-  )
-
-  expect_s3_class(plan, "surveyzones_plan")
-  expect_equal(nrow(plan$zones), 2L)
-  # No workload cap enforced — zones can have any workload
-  expect_true(is.infinite(plan$parameters$max_workload_per_zone))
-})
-
-test_that("error when neither target_zone_size nor finite max_workload", {
+test_that("error when max_workload_per_zone is infinite", {
   skip_if_not_installed("ROI.plugin.glpk")
   pts <- sf::st_as_sf(
     data.frame(
@@ -354,41 +288,6 @@ test_that("error when neither target_zone_size nor finite max_workload", {
       D_max = 10,
       enforce_partition = FALSE
     ),
-    "target_zone_size"
+    "max_workload_per_zone"
   )
-})
-
-test_that("both target_zone_size and max_workload uses max K", {
-  skip_if_not_installed("ROI.plugin.glpk")
-  pts <- sf::st_as_sf(
-    data.frame(
-      tract_id = sprintf("T%d", 1:6),
-      lon = c(-38.50, -38.501, -38.502, -38.503, -38.504, -38.505),
-      lat = c(-13.00, -13.001, -13.002, -13.003, -13.004, -13.005)
-    ),
-    coords = c("lon", "lat"), crs = 4326
-  )
-
-  tracts <- data.frame(
-    tract_id = sprintf("T%d", 1:6),
-    expected_service_time = rep(1, 6)
-  )
-
-  dists <- surveyzones_compute_sparse_distances(pts)
-
-  # target_zone_size = 3 -> K_size = 2
-  # max_workload = 2 -> K_workload = ceil(6/2) = 3
-  # Should use max(2, 3) = 3
-  plan <- surveyzones_build_zones(
-    sparse_distances = dists,
-    tracts = tracts,
-    D_max = 10,
-    max_workload_per_zone = 2,
-    target_zone_size = 3,
-    enforce_partition = FALSE
-  )
-
-  expect_s3_class(plan, "surveyzones_plan")
-  expect_gte(nrow(plan$zones), 3L)
-  expect_true(all(plan$zones$total_workload <= 2))
 })
