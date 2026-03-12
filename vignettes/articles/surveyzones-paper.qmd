@@ -124,6 +124,51 @@ as an input. A practical framework for survey operations must determine a
 feasible $K$ automatically, rather than requiring the user to specify it.
 
 
+## Mapping facility location vocabulary to survey operations {#sec-mapping}
+
+The facility location literature uses terminology drawn from logistics and
+retail siting. @tbl-mapping translates each concept to its survey
+operations counterpart and notes key differences.
+
+| OR term | Survey operations equivalent | Notes |
+|---------|------------------------------|-------|
+| **Facility** (site $j$) | **Zone center**---a tract whose location anchors a field zone | Every sampled tract is a candidate center; there is no fixed infrastructure. The "facility" is notional: it defines the geographic reference point of a zone, not a physical building. |
+| **Demand point** (client $i$) | **Sampled tract** (census tract or primary sampling unit) | Each tract requires a field visit. In the PNS application, tracts are UPAs (primary sampling units); in the Rio de Janeiro example, they are census tracts. |
+| **Demand / weight** ($w_i$) | **Expected service time** ($s_i$)---the workload a tract contributes to its zone | Unlike retail demand, survey workload is largely known before deployment: the number of target households per tract is fixed by the sampling frame. The objective is unweighted ($w_i = 1$); workload enters only through the capacity constraint. |
+| **Facility capacity** ($S_j$) | **Maximum workload per zone** ($W_{\max}$) | Uniform across zones. Reflects team capacity: how many tracts (or total service hours) a team can complete within the operational time window. |
+| **Assignment** ($x_{ij} = 1$) | **Tract $i$ belongs to the zone centered at $j$** | Assignment determines the field team's itinerary. Unlike logistics, the "customer" (household) does not choose a facility---assignment is determined centrally before deployment. |
+| **Transportation cost** ($d_{ij}$) | **Travel time** between tract $i$ and zone center $j$ | Measured in minutes (OSRM) or kilometres (haversine). Determines both the objective (minimize total travel) and the radius constraint ($d_{ij} \leq D_{\max}$). |
+| **Coverage radius** ($D_{\max}$) | **Maximum travel time from any tract to its zone center** | Ensures zones are compact enough for teams to complete collections and return within a time window (e.g., cold-chain constraints for biomarker collection). |
+| **Number of facilities** ($K$) | **Number of field zones** | Not specified by the user. Determined by the framework as the minimum $K$ for which all tracts can be feasibly assigned under $D_{\max}$ and $W_{\max}$. |
+| **Service / visit scheduling** | **Determined by field coordinators after zoning** | The model partitions territory into zones but does not schedule visits within zones. Dates, visit order, and team assignment are operational decisions made downstream, informed by the zone sequencing output. |
+
+: Mapping between facility location terminology and survey operations concepts. {#tbl-mapping}
+
+Two differences from classical facility location deserve emphasis. First,
+there is no fixed opening cost: every tract is a candidate center at zero
+cost, so the trade-off between opening costs and transport savings that
+drives the WLP does not apply. Second, the "demand" served by a facility is
+not a flow of customers choosing a provider; it is a centrally planned
+assignment of field work. The zoning decision is made once, before
+deployment, and determines the operational structure for the entire field
+period.
+
+The operational reality of household survey collection underscores why
+compact, workload-bounded zones are essential. An interviewer arrives at a
+sampled household, but the respondent may not be home; if home, may not
+answer the door; if they answer, may decline to participate; or may ask to
+reschedule to an evening or weekend. When a respondent is absent or
+unavailable, the interviewer must return---often at different times of day,
+including nights and weekends---until contact is made or the case is
+finalized. A single tract therefore requires multiple visits spread across
+days. Having a predetermined, geographically compact set of tracts to visit
+within a zone is what makes this iterative process efficient: interviewers
+can move between nearby tracts within the same zone, attempt contacts at
+different households while waiting for callbacks, and minimize deadhead
+travel between attempts. Without geographic compactness, the cost of
+revisits---which are the norm, not the exception---grows rapidly.
+
+
 # Related Work {#sec-related}
 
 ## p-Median
