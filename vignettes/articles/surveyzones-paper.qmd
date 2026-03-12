@@ -1,0 +1,944 @@
+---
+title: "Workload-Bounded Survey Zoning via Capacitated Facility Location with Geographic Diameter Bounds"
+author:
+  - name: Eduardo Leoni
+    affiliation: IBGE (Instituto Brasileiro de Geografia e Estatística)
+date: "2026-03-10"
+format:
+  html:
+    number-sections: true
+    toc: true
+    toc-depth: 3
+  pdf:
+    number-sections: true
+    toc: true
+    documentclass: article
+    geometry: margin=2.5cm
+    fontsize: 11pt
+execute:
+  warning: false
+  message: false
+bibliography: references.bib
+abstract: |
+  Survey organizations must partition geographic regions into field zones that
+  balance team workloads, remain geographically compact, and cover all sampled
+  units. Standard facility location models---the p-median problem, the Warehouse
+  Location Problem, and the Location Set Covering Problem---do not jointly
+  address the combination of constraints specific to survey operations: workload
+  capacity, a hard radius constraint on center-to-tract distance, and automatic
+  determination of the number of zones. We present surveyzones, an integrated
+  framework that enforces both constraints while searching for a feasible
+  number of centers, using a two-phase decomposition. Phase 1 solves an
+  uncapacitated p-median to find the minimum number of geographically feasible
+  travel groups; Phase 2 splits oversized groups via capacitated sub-problems.
+  The final zone count is an upper bound on the global minimum under both
+  constraints. A three-level TSP-based sequencing algorithm then orders groups,
+  zones, and tracts for efficient field traversal. We demonstrate the framework
+  on two applications at contrasting scales: census tract zoning for a household
+  survey in Rio de Janeiro (654 tracts, haversine distances) and biomarker
+  collection logistics for the Brazilian National Health Survey across all 27
+  state capitals (3,004 primary sampling units, OSRM road-network distances).
+  The framework is implemented as an open-source R package.
+---
+
+```{r}
+rdir <- '~/gitlab/ibgeba/pns.zonas/'
+
+```
+# Introduction
+
+Survey organizations face a fundamental operational challenge: how to partition
+geographic regions into zones for field teams such that each team has a
+manageable, balanced workload; field operations remain efficient (teams do not
+waste time traveling); and zones are geographically cohesive and traversable
+within a reasonable time budget.
+
+This challenge arises in every household survey that deploys interviewers or
+collection teams across a territory. When a national health survey adds
+biomarker collection---requiring cold-chain logistics and same-day sample
+processing---the zoning problem becomes critical: teams must complete all
+scheduled collections within a zone and return to the laboratory support point
+before samples degrade. Inefficient zoning translates directly into fewer
+collections per day, extended field periods, and higher costs.
+
+Standard facility location models in the operations research
+literature---such as the Location Set Covering Problem [LSCP; @toregas1971],
+the p-median problem [@hakimi1964], and the Warehouse Location Problem
+[WLP; @kuehn1963]---were designed for retail, emergency services, or supply
+chain contexts. While capacitated variants with distance cutoffs exist in the
+literature, no standard formulation combines workload capacity, a hard radius
+constraint ($D_{\max}$), and automatic determination of $K$ within a
+survey-oriented operational pipeline. Moreover, these models typically require
+the number of facilities $K$ as an input parameter.
+
+We present surveyzones, an integrated framework that enforces both
+constraints while searching for a feasible $K$, through a two-phase
+decomposition: an uncapacitated p-median finds the minimum number of
+geographically feasible *travel groups*, which are then split by workload
+capacity into final zones. The resulting three-level hierarchy (groups $\to$
+zones $\to$ tracts) is exploited by a TSP-based sequencing algorithm for
+efficient field traversal.
+
+The remainder of this paper is organized as follows. @sec-constraints defines
+the survey-specific constraints that motivate the model. @sec-related reviews
+related facility location models. @sec-model presents the surveyzones
+formulation, the two-phase decomposition, and the implementation pipeline.
+@sec-applications demonstrates the framework on two applications at
+contrasting scales. @sec-discussion discusses limitations and future
+directions.
+
+
+# Survey-Specific Constraints {#sec-constraints}
+
+**Workload capacity.** Field teams have finite capacity. Zones must respect a
+maximum workload per team ($W_{\max}$), and we assume $s_i \leq W_{\max}$ for
+every tract $i$ (no single tract exceeds team capacity). Unlike logistics
+applications where per-stop demand is unknown in advance, survey workload is
+largely predetermined: the target number of households per tract is fixed by
+the sampling frame. Expected service time per tract is therefore estimable
+before deployment. Note that the objective function minimizes total travel
+distance, not workload variance: "workload-bounded" refers to satisfying the
+capacity constraint, not to equitable distribution of workload across zones.
+
+**Geographic reach.** Teams cannot efficiently operate in zones that are
+geographically dispersed. $D_{\max}$ defines the maximum travel time (or
+distance) allowed between any tract and its zone center---a **radius
+constraint**. Any tract more than $D_{\max}$ from the zone center is excluded
+from that zone. The **diameter** of a zone, $\max_{i,j \in Z} d_{ij}$, is the
+maximum pairwise distance between any two tracts in the zone. Since every
+tract is within $D_{\max}$ of the zone center, the triangle inequality gives a
+derived diameter bound of $2 \times D_{\max}$.^[This bound is exact under a
+symmetric metric distance (e.g., haversine, or a symmetrized travel-time
+matrix). With directed/asymmetric travel times or mixed engines (e.g., OSRM
+for some pairs and haversine fallback for others), the metric assumptions may
+not hold exactly, so $2 \times D_{\max}$ should be treated as an operational
+rule of thumb rather than a formal guarantee. In practice, observed zone
+diameters are often well below $2
+\times D_{\max}$ because the sum-of-distances objective favors compact
+assignments.]
+
+**$K$ as output, not input.** The number of centers $K$ in the MILP is not
+known a priori---it depends on the spatial distribution of tracts, the
+$D_{\max}$ constraint, and the workload capacity. Existing models require $K$
+as an input. A practical framework for survey operations must determine a
+feasible $K$ automatically, rather than requiring the user to specify it.
+
+
+# Related Work {#sec-related}
+
+## p-Median
+
+The p-median problem minimizes total weighted travel distance from demand
+points to their nearest open facility, given $K$ facilities:
+
+$$\min \sum_i \sum_j d_{ij} \cdot w_i \cdot x_{ij}$$
+
+subject to $\sum_j y_j = K$, $\sum_j x_{ij} = 1\ \forall i$, and
+$x_{ij} \leq y_j\ \forall i,j$.
+
+The p-median minimizes total travel distance (demand-weighted by $w_i$);
+surveyzones minimizes unweighted total travel time. Workload ($s_i$) enters
+only through the capacity constraint (@eq-capacity), not the objective
+(@eq-objective): the objective is pure distance minimization, while workload
+constrains the feasible set. Both models minimize a sum-of-distances
+objective, but p-median imposes no workload capacity and no zone-size bound.
+It may produce zones with highly unequal workloads, since geographic
+proximity---not workload---drives assignment. It also allows zones to span
+arbitrarily large areas, which is operationally infeasible for survey teams.
+
+## Warehouse Location Problem
+
+The Warehouse Location Problem (WLP) minimizes fixed facility-opening costs
+plus variable transportation costs, subject to warehouse capacity:
+
+$$\min \sum_j f_j y_j + \sum_i \sum_j c_{ij} x_{ij}$$
+
+subject to $\sum_j x_{ij} = 1\ \forall i$ and
+$\sum_i s_i x_{ij} \leq S_j y_j\ \forall j$.
+
+surveyzones is structurally a capacitated facility location problem: every
+tract is a candidate zone center, opening costs are uniform, and the
+assignment cost is travel time. Unlike WLP---where $K$ is determined by
+trading off fixed opening costs against transport savings---surveyzones searches for a feasible $K$ via an external search loop, rather
+than requiring $K$ as input. The critical addition absent from
+standard WLP is the $D_{\max}$ constraint: WLP respects capacity but permits
+zones of arbitrary geographic extent.
+
+## Location Set Covering Problem
+
+The Location Set Covering Problem (LSCP) minimizes the number of facilities
+needed to ensure every demand point is within $D_{\max}$ of some open
+facility:
+
+$$\min \sum_j y_j \quad \text{s.t.} \quad \sum_{j:\, d_{ij} \leq D_{\max}} y_j \geq 1\ \forall i.$$
+
+LSCP shares surveyzones' goal of using as few zones as possible, and it uses
+$D_{\max}$ as a parameter. However, it produces no zone assignments---only
+facility locations---and its objective contains no workload balancing or
+distance minimization. Any two configurations achieving the same minimum $K$
+are equally optimal, even if one requires twice the total travel time.
+
+## Territory Design and Related Applications
+
+The territory design literature [@rios-mercado2009; @kalcsics2005] addresses
+geographic partitioning with workload balance and compactness objectives,
+primarily in sales force [@zoltners1983] and political districting contexts.
+@camacho2015 partition a city into police patrol sectors balancing workload,
+compactness, and geographic constraints---a problem structurally analogous to
+survey zoning. @begur1997 present an integrated spatial DSS for scheduling
+and routing home-health-care nurses that combines territory design with
+workload balancing for field workers. These models typically enforce
+contiguity and balance multiple criteria (population, workload, revenue) but
+do not impose a hard diameter bound. The number of territories is usually
+fixed exogenously. surveyzones shares the workload balance objective but adds
+$D_{\max}$ pre-filtering and a $K$-feasibility search that does not require
+the user to specify the number of zones.
+
+## Software
+
+The `spopt` library in the PySAL ecosystem [@rey2021] provides Python
+implementations of p-median, p-center, LSCP, MCLP, and capacitated variants.
+It is the closest existing tool to surveyzones but lacks $D_{\max}$
+pre-filtering and automatic $K$-search. The `ompr` R package
+[@schumacher2020] provides the MILP modelling language used by surveyzones.
+
+## Summary
+
+| | LSCP | p-median | WLP | Territory design | **surveyzones** |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Workload capacity | | | $\checkmark$ | $\checkmark$ | $\checkmark$ |
+| Radius constraint ($D_{\max}$) | | | | | $\checkmark$ |
+| 100% assignment | | $\checkmark$ | $\checkmark$ | $\checkmark$ | $\checkmark$ |
+| Distance minimization | | $\checkmark$ | $\checkmark$ | $\checkmark$ | $\checkmark$ |
+| $K$ not required as input | $\checkmark$ | | | | $\checkmark$ |
+
+: Constraint coverage across facility location models. LSCP ensures coverage (reachability within $D_{\max}$) but does not assign demand points to facilities. {#tbl-comparison}
+
+
+# The surveyzones Model {#sec-model}
+
+## Formulation
+
+For a fixed number of zones $K$, surveyzones solves a capacitated p-median
+MILP:
+
+$$\min \sum_i \sum_k d_{ik} \cdot z_{ik}$$ {#eq-objective}
+
+subject to:
+
+$$\sum_k z_{ik} = 1 \quad \forall i \quad \text{(all tracts assigned)}$$ {#eq-assignment}
+$$\sum_k y_k = K \quad \text{(exactly } K \text{ zones)}$$ {#eq-zones}
+$$z_{ik} \leq y_k \quad \forall i,k \quad \text{(assign only to open zones)}$$ {#eq-open}
+$$\sum_i s_i \cdot z_{ik} \leq W_{\max} \cdot y_k \quad \forall k \quad \text{(workload capacity)}$$ {#eq-capacity}
+
+where $d_{ik}$ is the travel time from tract $i$ to candidate center $k$,
+$z_{ik} \in \{0,1\}$ indicates whether tract $i$ is assigned to zone $k$,
+$y_k \in \{0,1\}$ indicates whether candidate $k$ is opened as a zone
+center, and $s_i$ is the workload (expected service time) of tract $i$. The
+candidate center set equals the full set of tracts: every tract may serve as a
+zone center.
+
+The geographic reach constraint ($d_{ik} \leq D_{\max}$) is enforced in
+pre-processing: any $(i, k)$ pair with travel time exceeding $D_{\max}$ is
+excluded from the model, setting $z_{ik} = 0$ by construction. Note that
+$D_{\max}$ and $d_{ik}$ share the same units, determined by the distance
+engine: minutes for OSRM travel times, kilometres for haversine distances.
+This $D_{\max}$ pre-filtering reduces the number of decision variables
+substantially and keeps zones geographically compact without adding
+constraints to the MILP.
+
+
+## Minimum-$K$ Search and Hierarchical Structure {#sec-k-discovery}
+
+The operative sizing parameter is $W_{\max}$: it defines how many tracts (or
+how much total service time) a team can handle and determines the actual size
+of zones. However, $K$ need not be derived directly from workload. The default
+strategy, `uncap_then_split`, decouples the $K$-search from workload balancing
+by producing a **three-level hierarchy: travel groups $\to$ zones $\to$
+tracts**.
+
+Algorithm 1: uncap_then_split
+
+1. Filter edges with d_ik ≤ Dmax
+2. Identify connected components
+3. For each component:
+      for K = 1,2,... until feasible:
+           solve uncapacitated p-median
+4. For each group:
+      if workload > Wmax:
+           solve capacitated p-median
+5. Return zones
+
+
+### Phase 1: Geographic grouping
+
+Phase 1 performs a feasibility search over $K$ using the p-median assignment
+structure with $D_{\max}$-filtered edges. Specifically, it solves the
+*uncapacitated* p-median---the formulation above without constraint
+(@eq-capacity)---starting from $K_0 = 1$ and incrementing until the assignment
+MILP is feasible (all tracts can be assigned to centers within $D_{\max}$).
+Starting from 1 rather than a workload-derived lower bound $\lceil n /
+W_{\max} \rceil$ is deliberate: Phase 1 ignores workload entirely and seeks the
+minimum $K$ for geographic feasibility alone, which may be much smaller. (When
+the $D_{\max}$ graph contains $C$ disconnected components, $K \geq C$ is a
+necessary condition for feasibility; connectivity analysis in Stage 2 already
+identifies these components, and each is solved independently.)
+
+$$K^*_{\text{uncap}} = \min \{ K \geq 1 : \text{uncapacitated MILP feasible} \}$$
+
+The distance-minimization objective does not drive $K$; it selects the
+best assignment at each $K$. Without capacity constraints the MILP has fewer
+variables and constraints, and convergence is fast. Each resulting cluster
+defines a **travel group**---a set of geographically cohesive tracts sharing
+the same Phase 1 center.
+
+### Phase 2: Workload splitting
+
+Any travel group whose total workload exceeds $W_{\max}$ is split into
+smaller **zones** by a single round of capacitated p-median restricted to that
+group. Each sub-problem involves only the tracts within one group and is
+solved instantly. The $D_{\max}$ radius constraint is re-applied in Phase 2:
+the sub-problem uses the same $D_{\max}$-filtered distance matrix, so
+sub-zone centers respect the same geographic reach as Phase 1. Groups already
+within capacity become single-zone groups.
+If the capacitated sub-problem at $K_{\text{split}} = \lceil W_{\text{group}}
+/ W_{\max} \rceil$ is infeasible (e.g., no set of $K_{\text{split}}$ distinct
+centers can partition the group within both $D_{\max}$ and $W_{\max}$), the
+implementation retries with increasing $K$ up to $n$ (trivially feasible:
+every tract becomes its own zone). If the solver still fails after all
+attempts (only possible due to solver time limits, not mathematical
+infeasibility), the implementation returns an infeasible status for that
+partition rather than accepting an oversized zone.
+The parent group relationship is preserved, so all sub-zones of a split group
+share the same group identifier.
+
+The `uncap_then_split` decomposition is a heuristic: because Phase 1 ignores
+workload, the travel groups it produces may not align with the globally
+optimal capacitated partition, and the final zone count after splitting is an
+upper bound on the true minimum $K$ under both constraints. The decomposition
+trades global optimality for computational tractability and the travel group
+hierarchy. Crucially, this hierarchy is
+not merely cosmetic: because every tract in a group is within $D_{\max}$ of
+the group center, any two tracts in the same group are reachable within $2
+\times D_{\max}$ of each other (under metric assumptions above). The groups
+produced by Phase 1 are large geographically coherent clusters under
+$D_{\max}$ because the uncapacitated solve prioritizes minimum center count
+before workload splitting. Zones within a group are therefore
+*operationally interchangeable*---field coordinators can reassign tracts
+between zones within a group, adjust team schedules, or absorb workload
+fluctuations without violating the geographic diameter bound. This
+interchangeability is a direct consequence of the group-first priority:
+groups are optimized for geographic cohesion before workload splits them
+into smaller units.
+
+The two-phase decomposition has several advantages over solving the full
+capacitated problem directly. First, the uncapacitated Phase 1 converges
+quickly because the MILP is smaller and the $K$-search only needs geographic
+feasibility. Second, Phase 2 sub-problems are tiny (typically 2--10 tracts
+each) and solved independently. Third, the resulting travel group structure
+provides a natural hierarchy for downstream sequencing and for human-readable
+zone identifiers.
+
+### Possible extension: direct capacitated solve with post-hoc grouping {#sec-direct}
+
+An alternative `direct` strategy solves the full capacitated p-median MILP
+directly, incrementing $K$ from a workload-derived lower bound $\lceil
+W_{\text{total}} / W_{\max} \rceil$. This produces the minimum number of
+zones under both constraints---potentially fewer than `uncap_then_split`---but
+does not inherently produce a group hierarchy.
+
+One possible extension is to recover groups after the direct solve via a
+lightweight set cover problem: given the fixed zones, find the fewest group
+centers such that every zone's tracts are within $D_{\max}$ of their group
+center. This post-processing set-cover layer is not required by the current
+core workflow and is presented here as an extension.
+Since every zone center already covers its own zone (the trivial solution
+$K_{\text{groups}} = K_{\text{zones}}$ is always feasible), set cover
+minimizes over this upper bound. The problem is tiny
+($\sim$10--30 zones per partition) and can be solved in milliseconds.
+
+The two strategies therefore represent different lexicographic priorities:
+
+- **`uncap_then_split`** (group-first): minimise groups, then split for
+  capacity. Produces the fewest, largest groups at the cost of potentially
+  more zones.
+- **`direct`** (zone-first): minimise zones under capacity. If needed,
+  groups may be added post-hoc as an extension.
+
+The choice depends on operational priorities: when field coordination at the
+group level dominates (e.g., team assignment, logistics planning), the
+group-first decomposition is preferable; when minimising the total number of
+field units is paramount, the direct strategy is appropriate.
+
+This architecture combines a $K$-feasibility search (inspired by LSCP),
+p-median's distance minimization, WLP's capacity constraints, and $D_{\max}$
+pre-filtering. The user specifies $W_{\max}$ and $D_{\max}$; the framework
+determines a feasible $K$ automatically.
+
+
+## Implementation Pipeline {#sec-pipeline}
+
+surveyzones operates in four stages.
+
+**Stage 1---Distance computation.** Pairwise travel times between tract access
+points are computed using a pluggable distance engine. The primary engine uses
+OSRM [@luxen2011] for road-network travel times. Where OSRM cannot route a
+pair (e.g., islands, river-only access), haversine great-circle distance is
+used and scaled to a deliberately harsh travel time penalty (equivalent to
+$\sim$1 km/h), discouraging cross-barrier assignments while keeping every
+tract assignable as a last resort. Distances are stored as sparse
+origin--destination pairs, which facilitates $D_{\max}$ filtering and
+disk caching.
+
+**Stage 2---Connectivity analysis.** The sparse distance table is filtered by
+$D_{\max}$ to produce a connectivity graph: only tract--center pairs within
+$D_{\max}$ are retained as feasible assignments. Disconnected components are
+identified via graph analysis. Partition constraints (e.g., by state or by
+agency jurisdiction) applied via `enforce_partition` further subdivide the
+problem. Each component of each partition is passed to Stage 3 as an
+independent sub-problem, enabling decomposition and potential parallelism
+across partitions.
+
+**Stage 3---Zone construction.** The two-phase `uncap_then_split` strategy
+(@sec-k-discovery) is executed for each sub-problem. The MILP is formulated
+using the `ompr` modelling language [@schumacher2020] and solved with HiGHS
+[@huangfu2018] (or GLPK/CBC as alternatives) via the ROI interface. Results
+are cached to disk: repeated calls with identical parameters return instantly
+without re-running the solver.
+
+**Stage 4---Sequencing.** Visit order is computed at three hierarchical
+levels, exploiting the group $\to$ zone $\to$ tract structure:
+
+1. **Group ordering** (within each partition): groups are ordered via TSP on
+   the minimum pairwise tract distances between representative zones of each
+   group.
+2. **Zone ordering** (within each group): zones are ordered via TSP on the
+   minimum pairwise tract distances between zones.
+3. **Tract ordering** (within each zone): tracts are ordered via TSP. Tract
+   sequences are oriented so that each zone's entry tract is closest to the
+   previous zone's exit tract.
+
+Missing cross-zone distances are filled using haversine with a speed penalty
+of 0.1 km/h---more severe than the 1 km/h used in Stage 1. The distinction is
+deliberate: during zone construction, the fallback must keep every tract
+assignable (penalty large enough to discourage, but finite); during sequencing,
+missing pairs represent true barriers between zones that should be visited last
+in any route. At the end
+of sequencing, zone IDs are renamed to a hierarchical format
+`{partition}_{group}.{position}` (e.g., `33_1.001`, `33_1.002`), making the
+travel group structure immediately visible in the zone identifier.
+
+
+# Applications {#sec-applications}
+
+The applications below are demonstrations of feasibility and operational
+relevance rather than causal evaluation of algorithmic performance. We
+illustrate the framework on two cases at contrasting scales: census tract
+zoning for a simulated household survey in Rio de Janeiro (@sec-census)
+and biomarker collection logistics for the Brazilian National Health Survey
+across all 27 state capitals (@sec-pns).
+
+## Census Tract Zoning: Rio de Janeiro {#sec-census}
+
+### Data and setup
+
+We construct a realistic survey scenario using publicly available data from
+the 2022 Brazilian Census. Census tracts for the city of Rio de Janeiro
+(municipality code 3304557) are obtained via the `censobr` package
+[@pereira2024]. Tracts with zero population are excluded.
+
+Rio de Janeiro has a single administrative district subdivided into 33
+subdistricts. We use subdistricts as strata and draw a stratified random
+sample of up to 20 tracts per subdistrict.
+
+```{r}
+#| label: census-setup
+#| eval: false
+
+library(censobr)
+library(cnefetools)
+library(surveyzones)
+library(dplyr)
+library(sf)
+
+set.seed(20091975)
+
+tracts_rj <- read_tracts(year = 2022, dataset = "Preliminares") |>
+  collect() |>
+  filter(code_muni == 3304557, V0001 > 0) |>
+  mutate(subdistrict = substr(code_tract, 1, 11))
+
+sampled_tracts <- tracts_rj |>
+  slice_sample(n = 20, by = subdistrict)
+```
+
+We enrich the sample with favela status from census tract characteristics:
+tracts belonging to recognised *aglomerados subnormais* (informal settlements)
+are flagged. This defines a **partition**: zones must not mix *comunidade*
+tracts with regular tracts, reflecting distinct access conditions and
+interviewer protocols.
+
+```{r}
+#| label: census-partition
+#| eval: false
+
+tract_chars <- read_tracts(year = 2022, dataset = "ResponsavelRenda") |>
+  collect() |>
+  filter(code_muni == 3304557) |>
+  select(code_tract, code_favela)
+
+sampled_tracts <- sampled_tracts |>
+  left_join(tract_chars, by = "code_tract") |>
+  mutate(partition_id = if_else(!is.na(code_favela), "comunidade", "regular"))
+```
+
+### Representative access points
+
+Geocoded household addresses from the CNEFE (Cadastro Nacional de Endereços
+para Fins Estatísticos) are downloaded via the `cnefetools` package. For each
+sampled tract, `surveyzones_representative_points()` computes the
+highest-density location using kernel density estimation on the geocoded
+addresses. These representative points approximate interviewer entry
+locations rather than geometric centroids, providing more operationally
+relevant origins for distance computation.
+
+```{r}
+#| label: census-access-points
+#| eval: false
+
+cnefe_rj <- read_cnefe(code_muni = 3304557) |> collect()
+
+cnefe_sample <- cnefe_rj |>
+  mutate(code_tract = substr(COD_SETOR, 1, 15)) |>
+  filter(code_tract %in% sampled_tracts$code_tract)
+
+access_pts <- surveyzones_representative_points(
+  cnefe_sample,
+  tract_col = "code_tract"
+)
+```
+
+### Zone construction
+
+Pairwise haversine distances are computed between access points. The
+capacitated p-median is solved with $D_{\max} = 3$ km and $W_{\max} = 5$
+tracts per zone. We build two plans---one ignoring the favela partition and
+one enforcing it---to illustrate the effect of operational constraints.
+
+```{r}
+#| label: census-zones
+#| eval: false
+
+distances <- surveyzones_compute_sparse_distances(
+  access_points = access_pts,
+  engine = surveyzones_engine_haversine(units = "km")
+)
+
+tracts_df <- st_drop_geometry(access_pts) |>
+  mutate(expected_service_time = 1L)
+
+plan_no_partition <- surveyzones_build_zones(
+  sparse_distances      = distances,
+  tracts                = tracts_df,
+  D_max                 = 3,
+  max_workload_per_zone = 5L,
+  enforce_partition      = FALSE,
+  solver                = "highs"
+)
+
+plan_partition <- surveyzones_build_zones(
+  sparse_distances      = distances,
+  tracts                = tracts_df,
+  D_max                 = 3,
+  max_workload_per_zone = 5L,
+  enforce_partition      = TRUE,
+  solver                = "highs"
+)
+```
+
+### Results
+
+```{r}
+#| label: census-results-code
+#| eval: false
+
+plan_no_partition <- surveyzones_sequence(plan_no_partition, distances)
+plan_partition    <- surveyzones_sequence(plan_partition, distances)
+
+surveyzones_compare(list(
+  no_partition = plan_no_partition,
+  partition    = plan_partition
+))
+```
+
+```{r}
+#| label: census-results
+#| echo: false
+
+census_cache <- readRDS("census_results.rds")
+plan_no_partition <- census_cache$plan_no_partition
+plan_partition    <- census_cache$plan_partition
+
+comp <- census_cache$comparison
+comp$plan_name <- c("No partition", "Partition")
+names(comp) <- c("Plan", "Partitions", "Tracts", "Zones",
+  "Wkld min", "Wkld max", "Wkld mean",
+  "Diam min (km)", "Diam max (km)", "Diam mean (km)", "Obj (km)")
+comp |>
+  tinytable::tt(
+    caption = "Census tract zoning: comparison of plans with and without favela partitioning.",
+    digits = 2
+  )
+```
+
+The stratified sample yields `r census_cache$n_tracts` tracts across
+`r census_cache$n_subdistricts` subdistricts, of which
+`r census_cache$n_comunidade` are classified as *comunidade* and
+`r census_cache$n_regular` as regular. Zoning uses only the observed sampled
+tracts; survey design weights do not affect the grouping.
+
+Without partitioning, the algorithm generates
+`r census_cache$comparison$n_zones[1]` zones (mean
+`r round(census_cache$comparison$workload_mean[1], 1)` tracts/zone, max
+diameter `r round(census_cache$comparison$diameter_max[1], 1)` km). Enforcing
+the favela partition increases the count to
+`r census_cache$comparison$n_zones[2]` zones (mean
+`r round(census_cache$comparison$workload_mean[2], 1)` tracts/zone, max
+diameter `r round(census_cache$comparison$diameter_max[2], 1)` km): isolated
+*comunidade* tracts that would otherwise join nearby regular tracts now form
+their own zones. Observed diameters remain well below the theoretical bound
+$2 \times D_{\max} = 6$ km, because the sum-of-distances objective favors
+compact assignments. The partitioned plan has a lower objective value (total
+travel distance) because the additional zones provide more centers, reducing
+average assignment distances. However, this comes at an operational cost:
+an increase in the number of zones necessary to cover all the assignments.
+
+The partition guarantee ensures that field teams assigned to
+informal settlements operate exclusively within that context---a common
+operational requirement reflecting distinct interviewer training, security
+protocols, and access logistics.
+
+```{r}
+#| label: census-stats
+#| echo: false
+#| fig-width: 8
+#| fig-height: 4
+
+surveyzones::surveyzones_plot_statistics(plan_partition, type = "all")
+```
+
+@fig-census-maps shows the resulting zone layouts. Each tract is coloured by
+travel group; convex hulls (with a 300 m buffer) delineate individual zones.
+Without partitioning, zone hulls may span both *comunidade* and regular tracts;
+with partitioning, each zone is confined to a single stratum.
+
+```{r}
+#| label: fig-census-maps
+#| echo: false
+#| fig-width: 10
+#| fig-height: 5
+#| fig-cap: "Rio de Janeiro census tract zoning. Left: no partition constraint. Right: favela/regular partition enforced. Tracts are coloured by travel group; translucent hulls delineate zones."
+
+library(sf)
+library(dplyr)
+
+make_map_gg <- function(plan, title = NULL) {
+  pts <- plan$access_points |>
+    dplyr::left_join(plan$assignments, by = "tract_id", suffix = c("", "_plan")) |>
+    sf::st_transform(4326L)
+
+  # Color by group_id
+  if (!is.null(plan$zone_sequence) && "group_id" %in% names(plan$zone_sequence)) {
+    group_lookup <- plan$zone_sequence |> dplyr::select(zone_id, group_id)
+    pts <- pts |>
+      dplyr::left_join(group_lookup, by = "zone_id") |>
+      dplyr::mutate(grp = factor(group_id))
+  } else {
+    pts <- pts |> dplyr::mutate(grp = factor(zone_id))
+  }
+
+  hulls <- pts |>
+    sf::st_transform(5880L) |>
+    dplyr::group_by(zone_id, grp) |>
+    dplyr::summarise(
+      geometry = sf::st_buffer(sf::st_convex_hull(sf::st_union(geometry)), dist = 300),
+      .groups = "drop"
+    ) |>
+    sf::st_transform(4326L)
+
+  ggplot2::ggplot() +
+    ggplot2::geom_sf(data = hulls, ggplot2::aes(fill = grp),
+                     alpha = 0.3, colour = "grey40", linewidth = 0.2) +
+    ggplot2::geom_sf(data = pts, ggplot2::aes(colour = grp),
+                     size = 0.6, show.legend = FALSE) +
+    ggplot2::scale_fill_viridis_d(option = "turbo", guide = "none") +
+    ggplot2::scale_colour_viridis_d(option = "turbo", guide = "none") +
+    ggplot2::labs(title = title) +
+    ggplot2::theme_void(base_size = 9) +
+    ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5, size = 10))
+}
+
+p1 <- make_map_gg(plan_no_partition, "No partition")
+p2 <- make_map_gg(plan_partition, "With partition")
+patchwork::wrap_plots(p1, p2, ncol = 2)
+```
+
+
+## National Health Survey: Biomarker Collection {#sec-pns}
+
+### Operational context
+
+The Brazilian National Health Survey (PNS) collects population health data
+from a representative sample of households. For the 2026 cycle, biomarker
+collection (blood and urine) is conducted in a subsample of households across
+all 27 state capitals and their respective metropolitan regions, with a
+completion deadline of October 2026.
+
+The operational flow is:
+
+1. Collection teams depart from a laboratory support point.
+2. They travel to a **geographic zone** (a group of primary sampling
+   units---UPAs).
+3. They complete scheduled collections within that zone.
+4. They return to the laboratory for sample processing.
+
+Biological samples require immediate cold storage after collection. Zones must
+therefore be compact enough for teams to complete all scheduled visits and
+return within the cold-chain time window. The zoning problem is not merely an
+efficiency concern---it directly constrains the feasibility of the collection
+protocol.
+
+### Parameters
+
+Based on operational requirements, the following parameters were adopted:
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| $D_{\max}$ | 10 min | Maximum OSRM travel time from any UPA to its zone center |
+| $W_{\max}$ | 6 UPAs | Maximum UPAs per zone |
+| Partition | By state (UF) | Each state solved independently |
+| Solver | HiGHS | Relative tolerance 1%, time limit 180s per state |
+
+### Distance computation
+
+Distances were computed using OSRM road-network travel times as the primary
+source (`surveyzones_engine_osrm(measure = "duration")`). For UPA pairs where
+OSRM could not compute a route (islands, river-only access), haversine
+distance scaled by a factor of 60 (equivalent to 1 km/h travel speed) was
+used as fallback. The 60$\times$ multiplier was chosen so that a 1 km
+haversine gap produces a 60-minute penalty---well above the 10-minute
+$D_{\max}$---making cross-barrier assignments prohibitively expensive while
+keeping every tract technically assignable as a last resort.
+
+```{r}
+#| label: pns-distances
+#| eval: false
+
+# Representative points per UPA (kernel density on geocoded addresses)
+access_points <- surveyzones_representative_points(households, tract_col = "upa")
+
+# OSRM distances (primary)
+d_osrm <- surveyzones_compute_sparse_distances(
+  access_points = access_points,
+  engine = surveyzones_engine_osrm(measure = "duration"),
+  chunk_size = 50
+)
+
+# Haversine distances (fallback)
+d_haversine <- surveyzones_compute_sparse_distances(
+  access_points = access_points,
+  engine = surveyzones_engine_haversine()
+)
+
+# Combine: OSRM preferred, haversine * 60 as fallback
+d_combined <- d_haversine |>
+  left_join(d_osrm,
+            by = join_by(origin_id, destination_id),
+            suffix = c("_haversine", "_osrm")) |>
+  mutate(distance = coalesce(distance_osrm, distance_haversine * 60))
+```
+
+### Zone construction and sequencing
+
+Each state is solved independently via `enforce_partition = TRUE`. The
+`uncap_then_split` strategy first finds the minimum number of travel groups
+per state, then splits oversized groups to respect the 6-UPA limit.
+
+```{r}
+#| label: pns-zones
+#| eval: false
+
+plan <- surveyzones_build_zones(
+  sparse_distances      = d_combined,
+  tracts                = tracts,
+  D_max                 = 10,
+  max_workload_per_zone = 6,
+  enforce_partition      = TRUE,
+  solver                = "highs",
+  max_time              = 180,
+  rel_tol               = 0.01
+)
+
+plan <- surveyzones_sequence(plan, d_combined)
+```
+
+### Results
+
+```{r}
+#| label: pns-results
+#| echo: false
+#| eval: !expr requireNamespace("pns.zonas", quietly = TRUE)
+
+library(pns.zonas)
+library(surveyzones)
+library(dplyr)
+
+plan_full <- readr::read_rds(file.path(rdir, "vignettes/zonas.rds"))
+
+uf_siglas <- c(
+  "11" = "RO", "12" = "AC", "13" = "AM", "14" = "RR", "15" = "PA",
+  "16" = "AP", "17" = "TO", "21" = "MA", "22" = "PI", "23" = "CE",
+  "24" = "RN", "25" = "PB", "26" = "PE", "27" = "AL", "28" = "SE",
+  "29" = "BA", "31" = "MG", "32" = "ES", "33" = "RJ", "35" = "SP",
+  "41" = "PR", "42" = "SC", "43" = "RS", "50" = "MS", "51" = "MT",
+  "52" = "GO", "53" = "DF"
+)
+
+resumo <- plan_full$zones |>
+  mutate(uf_codigo = substr(zone_id, 1, 2)) |>
+  summarise(
+    n_zonas = n(),
+    upas_total = sum(n_tracts),
+    tamanho_mediano = median(n_tracts),
+    diametro_mediano = median(diameter, na.rm = TRUE),
+    n_zonas_1upa = sum(n_tracts == 1),
+    pct_zonas_1upa = 100 * mean(n_tracts == 1),
+    .by = uf_codigo
+  ) |>
+  mutate(UF = uf_siglas[uf_codigo]) |>
+  arrange(uf_codigo) |>
+  select(
+    UF, Zones = n_zonas, UPAs = upas_total,
+    `Median size` = tamanho_mediano, `Median diam. (min)` = diametro_mediano,
+    `1-UPA zones` = n_zonas_1upa, `% 1-UPA` = pct_zonas_1upa
+  )
+
+totais <- tibble::tibble(
+  UF = "Total",
+  Zones = sum(resumo$Zones),
+  UPAs = sum(resumo$UPAs),
+  `Median size` = median(plan_full$zones$n_tracts),
+  `Median diam. (min)` = median(plan_full$zones$diameter, na.rm = TRUE),
+  `1-UPA zones` = sum(resumo$`1-UPA zones`),
+  `% 1-UPA` = round(100 * sum(resumo$`1-UPA zones`) / sum(resumo$Zones), 1)
+)
+
+resumo <- bind_rows(resumo, totais)
+
+tinytable::tt(resumo,
+  caption = "Zone summary by state for the PNS biomarker collection.",
+  digits = 1
+) |>
+  tinytable::style_tt(i = nrow(resumo), bold = TRUE)
+```
+
+The framework partitions the 3,004 UPAs across 27 states into 905 zones that
+respect both the 10-minute radius bound ($D_{\max}$) and the 6-UPA workload
+limit. States
+with dense urban cores (e.g., DF, RJ) produce larger zones with lower
+diameters; states with dispersed metropolitan regions (e.g., AM, PA) produce
+more single-UPA zones where geographic isolation makes grouping infeasible.
+
+All 27 state-level sub-problems reached optimality. Total solve time across
+all states was 1,269 seconds (median 36 seconds per state, range 8--147
+seconds). The most expensive sub-problem was Espírito Santo (state 32, 147
+seconds). These timings include the full `uncap_then_split` pipeline
+(Phase 1 $K$-search + Phase 2 splitting) using HiGHS on a single core.
+
+
+
+# Discussion {#sec-discussion}
+
+## Contributions
+
+The contribution of surveyzones is not a new facility location formulation but an operational framework that combines radius-constrained assignment, capacity constraints, and a K-feasibility search within a decomposition architecture tailored to large survey zoning problems. 
+It implements a decomposition strategy that separates geographic feasibility from workload bounding: an uncapacitated p-median is used to identify the smallest K for which assignment under a radius constraint is feasible, after which capacitated subproblems enforce workload limits. This decomposition converts a large capacitated location problem into a sequence of smaller tractable problems while preserving operational interpretability.
+
+The two-phase `uncap_then_split` decomposition is a practical contribution:
+by decoupling geographic feasibility from workload bounding, it avoids
+solving a large capacitated MILP directly. Phase 1 converges quickly (the
+uncapacitated problem is smaller and the $K$-search only requires geographic
+feasibility), and Phase 2 sub-problems are tiny. The resulting travel group
+hierarchy provides a natural structure for three-level sequencing and for
+human-readable zone identifiers.
+
+## Partitioning as an operational tool
+
+The `enforce_partition` mechanism deserves emphasis. In the census tract
+example, partitioning by favela status ensures that field teams assigned to
+informal settlements operate exclusively within that context---a requirement
+driven by distinct interviewer training, security protocols, and access
+logistics. In the PNS application, partitioning by state ensures that zones do
+not cross jurisdictional boundaries. The partitioning is flexible: it can be
+extended to other criteria such as agency jurisdiction (ensuring that UPAs
+from distinct agencies are never grouped together) or area type (solving
+favelas separately from regular urban areas, given substantially different
+access and travel time profiles).
+
+## Limitations and possible extensions
+
+The current framework assumes that workload per tract is known in advance and
+static. In adaptive survey designs where workload depends on response rates
+observed during data collection, dynamic re-zoning may be needed. The
+framework's caching mechanism could support incremental re-optimization, but
+this is not yet implemented.
+
+The $D_{\max}$ pre-filtering is a hard constraint: tracts beyond $D_{\max}$
+from all candidate centers cannot be assigned and are flagged as isolated
+components. In practice these are rare (islands, remote areas) and are handled
+as single-tract zones, but a soft-constraint formulation could provide more
+flexibility.
+
+The MILP formulation does not enforce zone contiguity explicitly; contiguity
+is achieved indirectly through $D_{\max}$ pre-filtering and the
+sum-of-distances objective, which naturally favors compact, connected zones.
+For applications where non-contiguous zones are unacceptable, explicit
+contiguity constraints could be added at the cost of increased model
+complexity.
+
+The `uncap_then_split` heuristic trades global optimality for computational
+tractability and the travel group hierarchy. The optimality gap---the
+difference between the zone count produced by `uncap_then_split` and the
+true minimum under both constraints---is zero when no Phase 1 group exceeds
+$W_{\max}$ (no splitting needed), and grows with the number of oversized
+groups. In the PNS application, where workload per UPA is relatively uniform
+and $W_{\max}$ is generous (6 UPAs), most groups fit within capacity
+directly; the gap is driven by a small number of dense urban clusters.
+The `direct` strategy (@sec-direct) provides a comparator for the minimum
+zone count under the same constraints and can be used to quantify this gap on
+a case-by-case basis
+though at higher computational cost for large instances.
+
+
+# Conclusion {#sec-conclusion}
+
+We presented surveyzones, an integrated framework for constructing
+workload and geographically bounded survey field zones. The framework
+combines a capacitated p-median MILP with $D_{\max}$ pre-filtering, a
+two-phase decomposition that decouples geographic feasibility from workload
+balancing, and a three-level TSP-based sequencing algorithm. We demonstrated
+the framework on two applications: census tract zoning for a household survey
+in Rio de Janeiro and biomarker collection logistics for the Brazilian
+National Health Survey across 27 state capitals.
+
+The framework is implemented as an open-source R package (`surveyzones`). It
+supports pluggable distance engines (OSRM,
+haversine), multiple MILP solvers (HiGHS, GLPK, CBC), disk caching for
+reproducibility, and flexible partitioning by arbitrary administrative or
+operational criteria.
+
+
+# References {.unnumbered}
+
+::: {#refs}
+:::
