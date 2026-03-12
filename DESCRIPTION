@@ -38,6 +38,7 @@ Suggests:
     dodgr,
     duckdb,
     geodist,
+    googleway,
     htmltools,
     leaflet,
     mapgl,
