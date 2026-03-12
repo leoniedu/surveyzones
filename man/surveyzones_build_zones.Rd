@@ -11,7 +11,6 @@ surveyzones_build_zones(
   max_workload_per_zone = Inf,
   K_max = NULL,
   enforce_partition = TRUE,
-  candidates = NULL,
   max_variables = 500000L,
   solver = "glpk",
   max_time = 300,
@@ -43,10 +42,6 @@ partition.}
 
 \item{enforce_partition}{Logical.  Whether to split by
 \code{partition_id} (default \code{TRUE}).}
-
-\item{candidates}{Optional character vector of tract_ids eligible
-to be zone centers.  \code{NULL} (default) means all tracts are
-candidates.}
 
 \item{max_variables}{Integer.  Safety limit on the number of
 x variables in the MILP.  Aborts if exceeded.}

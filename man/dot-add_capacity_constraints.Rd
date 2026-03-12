@@ -4,14 +4,14 @@
 \alias{.add_capacity_constraints}
 \title{Add Capacity Constraints to MILP}
 \usage{
-.add_capacity_constraints(model, pair_i, pair_j, w, m, max_workload_per_zone)
+.add_capacity_constraints(model, ps_by_j, pair_i, w, m, max_workload_per_zone)
 }
 \arguments{
 \item{model}{An ompr MILP model.}
 
-\item{pair_i}{Integer vector mapping sparse pair index to tract index.}
+\item{ps_by_j}{List mapping center index to sparse-pair indices.}
 
-\item{pair_j}{Integer vector mapping sparse pair index to center index.}
+\item{pair_i}{Integer vector mapping sparse pair index to tract index.}
 
 \item{w}{Numeric vector of tract workloads.}
 

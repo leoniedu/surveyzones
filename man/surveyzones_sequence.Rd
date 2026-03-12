@@ -62,8 +62,12 @@ The same \code{plan} with two new components:
 }
 }
 \description{
-Computes a spatial visit order at two levels: (1) zones within each
-partition via TSP on minimum pairwise tract distances, and (2) tracts
-within each zone via seriation.  Tract sequences are oriented so that
-each zone's entry tract is closest to the previous zone's exit tract.
+Computes a spatial visit order at three hierarchical levels:
+(1) \strong{groups} within each partition via TSP on minimum pairwise
+tract distances between group representatives,
+(2) \strong{zones} within each group via TSP on minimum pairwise tract
+distances, and (3) \strong{tracts} within each zone via TSP.
+Tract sequences are oriented so that each zone's entry tract is
+closest to the previous zone's exit tract.  At the end, zone IDs
+are renamed to \verb{\{partition\}_\{group\}.\{position\}} format.
 }

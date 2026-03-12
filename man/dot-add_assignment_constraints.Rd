@@ -4,12 +4,12 @@
 \alias{.add_assignment_constraints}
 \title{Add Assignment Constraints to MILP}
 \usage{
-.add_assignment_constraints(model, pair_i, n)
+.add_assignment_constraints(model, ps_by_i, n)
 }
 \arguments{
 \item{model}{An ompr MILP model.}
 
-\item{pair_i}{Integer vector mapping sparse pair index to tract index.}
+\item{ps_by_i}{List mapping tract index to sparse-pair indices.}
 
 \item{n}{Integer. Number of tracts.}
 }

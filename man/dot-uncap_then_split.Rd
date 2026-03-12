@@ -11,7 +11,6 @@
   K_max,
   D_max,
   max_workload_per_zone,
-  candidates,
   max_variables,
   solver,
   max_time,
@@ -34,8 +33,6 @@ before solving.}
 \item{max_workload_per_zone}{Numeric scalar.  Upper bound on
 the sum of \code{expected_service_time} within any zone.  Defaults
 to \code{Inf} (uncapacitated).}
-
-\item{candidates}{Character vector of candidate center tract_ids.}
 
 \item{max_variables}{Integer.  Safety limit on the number of
 x variables in the MILP.  Aborts if exceeded.}

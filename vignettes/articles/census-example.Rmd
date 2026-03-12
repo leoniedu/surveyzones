@@ -81,7 +81,7 @@ Subdistricts are the strata (Rio de Janeiro city has a single district but 33
 subdistricts). We draw up to **20 tracts per subdistrict**.
 
 ```{r sample}
-n_per_stratum <- 20L
+n_per_stratum <- 10L
 set.seed(20091975)
 sampled_tracts_0 <- tracts_rj |>
   group_by(subdistrict) |>
@@ -390,7 +390,7 @@ surveyzones_export_plan(plan_partition, path = "output/rj_zones")
 surveyzones_compare(list(
   no_partition = plan_no_partition,
   partition    = plan_partition
-))|>t()
+))|>t()|>as.data.frame()|>tinytable::tt(rownames = TRUE)
 ```
 
 For production surveys consider:
@@ -432,67 +432,3 @@ Aplicamos o pipeline completo ao Rio de Janeiro, usando dados abertos do Censo
 1. Amostra estratificada por subdistrito
 2. Endereços via CNEFE → ponto representativo por setor (densidade de kernel)
 3. Zonas via p-mediana capacitada (MILP, solver HiGHS) — máximo 5 setores e 3 km por zona
-
----
-
-**O detalhe que faz diferença: favelas**
-
-Setores em *aglomerados subnormais* têm acesso e protocolos distintos. Misturá-los
-com setores regulares na mesma zona é conveniente para o algoritmo, mas inviável
-na prática.
-
-O **surveyzones** resolve isso com `enforce_partition = TRUE`: cada zona passa a
-ser homogênea. O custo? Um modesto aumento no número de zonas — veja a comparação:
-
-```{r sumario-tabela, echo=FALSE}
-comp <- dplyr::bind_rows(
-  dplyr::mutate(plan_no_partition$assignments, cenario = "Sem particao"),
-  dplyr::mutate(plan_partition$assignments,    cenario = "Com particao")
-) |>
-  dplyr::group_by(cenario) |>
-  dplyr::summarise(
-    `Zonas`             = dplyr::n_distinct(zone_id),
-    `Setores alocados`  = dplyr::n(),
-    `Dist. media (km)`  = round(mean(distance_to_center, na.rm = TRUE), 2),
-    `Dist. maxima (km)` = round(max(distance_to_center,  na.rm = TRUE), 2),
-    .groups = "drop"
-  ) |>
-  dplyr::rename(Cenario = cenario)
-
-knitr::kable(comp, align = "lrrrr")
-```
-
-```{r sumario-stats-no-partition, echo=FALSE, fig.width=8, fig.height=4, out.width="100%"}
-surveyzones_plot_statistics(plan_no_partition, type = "all")
-```
-*Distribuição das zonas — sem partição*
-
-```{r sumario-stats-partition, echo=FALSE, fig.width=8, fig.height=4, out.width="100%"}
-surveyzones_plot_statistics(plan_partition, type = "all")
-```
-*Distribuição das zonas — com partição*
-
-```{r sumario-map-no-partition, echo=FALSE, eval=knitr::pandoc_to() == "html"}
-make_map(plan_no_partition)
-```
-*Mapa sem partição — setores de favela (laranja) podem aparecer na mesma zona
-que setores regulares (verde)*
-
-```{r sumario-map-partition, echo=FALSE, eval=knitr::pandoc_to() == "html"}
-make_map(plan_partition)
-```
-*Mapa com partição — cada zona é homogênea*
-
----
-
-**O pipeline completo**
-
-> `surveyzones` agrupa setores em zonas compactas →
-> `orce` aloca as zonas às agências do IBGE
-
-Aplicação imediata: planejamento da coleta de biomarcadores da **PNS 2026**.
-Mas a lógica é genérica para qualquer pesquisa domiciliar com coleta presencial.
-
-Ambos os pacotes são open source, em R.
-
-`#EstatísticaPública` `#PesquisaOperacional` `#IBGE` `#PNS2026` `#R`

@@ -1,6 +1,71 @@
 utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tracts"))
 
 #' @keywords internal
+.is_solution_status <- function(status) {
+  status %in% c("optimal", "feasible")
+}
+
+#' @keywords internal
+.normalize_solver_status <- function(result) {
+  raw_status <- ompr::solver_status(result)
+  status <- if (raw_status == "success") "optimal" else raw_status
+  obj <- tryCatch(ompr::objective_value(result), error = function(e) NA_real_)
+  if (!.is_solution_status(status) && is.finite(obj)) {
+    status <- "feasible"
+  }
+  list(
+    status = status,
+    raw_status = raw_status,
+    objective_value = obj
+  )
+}
+
+#' @keywords internal
+.solve_model_with_status <- function(model, solver, max_time, rel_tol, verbose) {
+  params <- .solver_control_params(solver, max_time, rel_tol, verbose)
+  result <- ompr::solve_model(
+    model,
+    do.call(ompr.roi::with_ROI, params)
+  )
+  info <- .normalize_solver_status(result)
+  c(list(result = result), info)
+}
+
+#' @keywords internal
+.empty_zone_solution <- function(
+  solver_status = "infeasible",
+  objective_value = NA_real_,
+  n_variables = NA_integer_,
+  solve_time = NA_real_
+) {
+  list(
+    assignments = tibble::tibble(
+      tract_id = character(0),
+      zone_id = character(0),
+      partition_id = character(0),
+      center_id = character(0),
+      distance_to_center = numeric(0),
+      group_id = character(0)
+    ),
+    zones = tibble::tibble(
+      zone_id = character(0),
+      partition_id = character(0),
+      center_tract_id = character(0),
+      total_workload = numeric(0),
+      diameter = numeric(0),
+      n_tracts = integer(0),
+      group_id = character(0)
+    ),
+    diagnostics = list(
+      solver_status = solver_status,
+      objective_value = objective_value,
+      n_variables = n_variables,
+      solve_time = solve_time
+    )
+  )
+}
+
+#' @keywords internal
 .surveyzones_build_zones_impl <- function(
   sparse_distances,
   tracts,
@@ -8,7 +73,6 @@ utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tra
   max_workload_per_zone = Inf,
   K_max = NULL,
   enforce_partition = TRUE,
-  candidates = NULL,
   max_variables = 500000L,
   solver = "glpk",
   max_time = 300,
@@ -51,12 +115,7 @@ utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tra
       dplyr::filter(origin_id %in% part_ids, destination_id %in% part_ids)
     cli::cli_alert_info("Distance pairs for partition (unfiltered): {nrow(part_full_dist)}")
 
-    part_candidates <- if (!is.null(candidates)) {
-      intersect(candidates, part_ids)
-    } else {
-      part_ids
-    }
-    cli::cli_alert_info("Candidate centers: {length(part_candidates)}")
+    cli::cli_alert_info("Candidate centers: {length(part_ids)} (all tracts)")
 
     k_max_part <- K_max %||% nrow(part_tracts)
 
@@ -67,7 +126,6 @@ utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tra
       max_workload_per_zone = max_workload_per_zone,
 
       K_max = k_max_part,
-      candidates = part_candidates,
       max_variables = max_variables,
       solver = solver,
       max_time = max_time,
@@ -150,9 +208,6 @@ utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tra
 #'   partition.
 #' @param enforce_partition Logical.  Whether to split by
 #'   `partition_id` (default `TRUE`).
-#' @param candidates Optional character vector of tract_ids eligible
-#'   to be zone centers.  `NULL` (default) means all tracts are
-#'   candidates.
 #' @param max_variables Integer.  Safety limit on the number of
 #'   x variables in the MILP.  Aborts if exceeded.
 #' @param solver Character scalar.  Which MILP solver backend to use.
@@ -189,7 +244,6 @@ surveyzones_build_zones <- function(
   max_workload_per_zone = Inf,
   K_max = NULL,
   enforce_partition = TRUE,
-  candidates = NULL,
   max_variables = 500000L,
   solver = "glpk",
   max_time = 300,
@@ -206,7 +260,6 @@ surveyzones_build_zones <- function(
     max_workload_per_zone = max_workload_per_zone,
     K_max                 = K_max,
     enforce_partition     = enforce_partition,
-    candidates            = candidates,
     max_variables         = max_variables,
     solver                = solver,
     max_time              = max_time,
@@ -241,7 +294,6 @@ surveyzones_build_zones <- function(
 #'
 #' @inheritParams surveyzones_build_zones
 #' @param full_sparse_distances Tibble of all distance pairs (unfiltered).
-#' @param candidates Character vector of candidate center tract_ids.
 #'
 #' @return A list with `assignments`, `zones`, and `diagnostics`.
 #' @keywords internal
@@ -251,7 +303,6 @@ surveyzones_build_zones_single <- function(
   D_max,
   max_workload_per_zone = Inf,
   K_max,
-  candidates,
   max_variables = 500000L,
   solver = "glpk",
   max_time = 300,
@@ -263,6 +314,13 @@ surveyzones_build_zones_single <- function(
   total_workload <- sum(tracts$expected_service_time)
 
   capacitated <- is.finite(max_workload_per_zone)
+
+  valid_strategies <- c("auto", "uncap_then_split", "direct")
+  if (!strategy %in% valid_strategies) {
+    cli::cli_abort(
+      "{.arg strategy} must be one of {.val {valid_strategies}}, not {.val {strategy}}."
+    )
+  }
 
   # Resolve effective strategy early so K0 can depend on it
   effective_strategy <- if (strategy == "auto") {
@@ -321,94 +379,18 @@ surveyzones_build_zones_single <- function(
     all_comp_assignments <- vector("list", comp$no)
     all_comp_zones <- vector("list", comp$no)
     total_obj <- 0
+    overall_comp_status <- "optimal"
     start_time <- proc.time()[["elapsed"]]
 
     for (ci in seq_len(comp$no)) {
       comp_ids <- names(comp_membership[comp_membership == ci])
       comp_n <- length(comp_ids)
 
-      # Singletons: no MILP needed, assign directly
-      if (comp_n == 1) {
-        wl <- tracts$expected_service_time[tracts$tract_id == comp_ids]
-        all_comp_assignments[[ci]] <- tibble::tibble(
-          tract_id = comp_ids,
-          zone_id = comp_ids,
-          partition_id = NA_character_,
-          center_id = comp_ids,
-          distance_to_center = 0,
-          group_id = comp_ids
-        )
-        all_comp_zones[[ci]] <- tibble::tibble(
-          zone_id = comp_ids,
-          partition_id = NA_character_,
-          center_tract_id = comp_ids,
-          total_workload = wl,
-          diameter = 0,
-          n_tracts = 1L,
-          group_id = comp_ids
-        )
-        next
-      }
-
-      # Small-component shortcut: if the component's total workload fits in one
-      # zone AND all tracts are within D_max of the medoid, use K=1 directly.
-      comp_wl <- sum(tracts$expected_service_time[tracts$tract_id %in% comp_ids])
-      if (!is.infinite(max_workload_per_zone) && comp_wl <= max_workload_per_zone) {
-        # Pre-filter to intra-component distances only (small table, fast lookup)
-        comp_dists <- full_sparse_distances |>
-          dplyr::filter(
-            .data$origin_id %in% comp_ids,
-            .data$destination_id %in% comp_ids,
-            .data$origin_id != .data$destination_id
-          )
-        center_id <- if (nrow(comp_dists) > 0L) {
-          comp_dists |>
-            dplyr::summarise(
-              total_dist = sum(.data$distance), .by = "origin_id"
-            ) |>
-            dplyr::slice_min(.data$total_dist, n = 1L, with_ties = FALSE) |>
-            dplyr::pull(.data$origin_id)
-        } else {
-          comp_ids[[1L]]
-        }
-        # Look up distances in comp_dists (tiny), not full_sparse_distances
-        dist_to_ctr <- purrr::map_dbl(comp_ids, \(tid) {
-          if (tid == center_id) return(0)
-          d <- comp_dists$distance[
-            comp_dists$origin_id == tid &
-              comp_dists$destination_id == center_id
-          ]
-          if (length(d) == 0L) NA_real_ else d[[1L]]
-        })
-        # Only use shortcut if all tracts are within D_max of the center
-        if (all(!is.na(dist_to_ctr) & dist_to_ctr <= D_max)) {
-          all_comp_assignments[[ci]] <- tibble::tibble(
-            tract_id = comp_ids,
-            zone_id = center_id,
-            partition_id = NA_character_,
-            center_id = center_id,
-            distance_to_center = dist_to_ctr,
-            group_id = center_id
-          )
-          all_comp_zones[[ci]] <- tibble::tibble(
-            zone_id = center_id,
-            partition_id = NA_character_,
-            center_tract_id = center_id,
-            total_workload = comp_wl,
-            diameter = if (nrow(comp_dists) > 0L) max(comp_dists$distance) else 0,
-            n_tracts = comp_n,
-            group_id = center_id
-          )
-          next
-        }
-      }
-
       cli::cli_alert_info("Component {ci}/{comp$no}: {comp_n} tracts")
 
       comp_tracts <- tracts |> dplyr::filter(tract_id %in% comp_ids)
       comp_full_dist <- full_sparse_distances |>
         dplyr::filter(origin_id %in% comp_ids, destination_id %in% comp_ids)
-      comp_candidates <- intersect(candidates, comp_ids)
       comp_K_max <- min(K_max, comp_n)
 
       # Solve this component (will find 1 component and use normal K loop)
@@ -417,9 +399,8 @@ surveyzones_build_zones_single <- function(
         tracts = comp_tracts,
         D_max = D_max,
         max_workload_per_zone = max_workload_per_zone,
-  
+
         K_max = comp_K_max,
-        candidates = comp_candidates,
         max_variables = max_variables,
         solver = solver,
         max_time = max_time,
@@ -430,6 +411,23 @@ surveyzones_build_zones_single <- function(
 
       all_comp_assignments[[ci]] <- comp_result$assignments
       all_comp_zones[[ci]] <- comp_result$zones
+      if (!.is_solution_status(comp_result$diagnostics$solver_status)) {
+        bad_status <- comp_result$diagnostics$solver_status
+        if (is.null(bad_status) || is.na(bad_status) || !nzchar(bad_status)) {
+          bad_status <- "infeasible"
+        }
+        cli::cli_alert_danger(
+          "Component {ci}/{comp$no} failed (status: {comp_result$diagnostics$solver_status}); partition infeasible"
+        )
+        return(.empty_zone_solution(
+          solver_status = bad_status,
+          n_variables = NA_integer_,
+          solve_time = proc.time()[["elapsed"]] - start_time
+        ))
+      }
+      if (comp_result$diagnostics$solver_status == "feasible") {
+        overall_comp_status <- "feasible"
+      }
       if (!is.na(comp_result$diagnostics$objective_value)) {
         total_obj <- total_obj + comp_result$diagnostics$objective_value
       }
@@ -447,7 +445,7 @@ surveyzones_build_zones_single <- function(
       assignments = combined_assignments,
       zones = combined_zones,
       diagnostics = list(
-        solver_status = "optimal",
+        solver_status = overall_comp_status,
         objective_value = total_obj,
         n_variables = NA_integer_,
         solve_time = elapsed
@@ -465,7 +463,6 @@ surveyzones_build_zones_single <- function(
       K_max = K_max,
       D_max = D_max,
       max_workload_per_zone = max_workload_per_zone,
-      candidates = candidates,
       max_variables = max_variables,
       solver = solver,
       max_time = max_time,
@@ -485,7 +482,6 @@ surveyzones_build_zones_single <- function(
       K = K,
       D_max = D_max,
       max_workload_per_zone = max_workload_per_zone,
-      candidates = candidates,
       max_variables = max_variables,
       solver = solver,
       max_time = max_time,
@@ -493,7 +489,7 @@ surveyzones_build_zones_single <- function(
       verbose = verbose
     )
 
-    if (result$diagnostics$solver_status == "optimal") {
+    if (.is_solution_status(result$diagnostics$solver_status)) {
       cli::cli_alert_success(
         "Feasible at K = {K} (objective = {round(result$diagnostics$objective_value, 2)})"
       )
@@ -505,30 +501,10 @@ surveyzones_build_zones_single <- function(
 
   cli::cli_alert_danger("No feasible solution found up to K_max = {K_max}.")
   # Return an infeasible result
-  list(
-    assignments = tibble::tibble(
-      tract_id = character(0),
-      zone_id = character(0),
-      partition_id = character(0),
-      center_id = character(0),
-      distance_to_center = numeric(0),
-      group_id = character(0)
-    ),
-    zones = tibble::tibble(
-      zone_id = character(0),
-      partition_id = character(0),
-      center_tract_id = character(0),
-      total_workload = numeric(0),
-      diameter = numeric(0),
-      n_tracts = integer(0),
-      group_id = character(0)
-    ),
-    diagnostics = list(
-      solver_status = "infeasible",
-      objective_value = NA_real_,
-      n_variables = NA_integer_,
-      solve_time = NA_real_
-    )
+  .empty_zone_solution(
+    solver_status = "infeasible",
+    n_variables = NA_integer_,
+    solve_time = NA_real_
   )
 }
 
@@ -538,14 +514,14 @@ surveyzones_build_zones_single <- function(
 #' Each tract must be assigned to exactly one center.
 #'
 #' @param model An ompr MILP model.
-#' @param pair_i Integer vector mapping sparse pair index to tract index.
+#' @param ps_by_i List mapping tract index to sparse-pair indices.
 #' @param n Integer. Number of tracts.
 #'
 #' @return Updated MILP model with assignment constraints.
 #' @keywords internal
-.add_assignment_constraints <- function(model, pair_i, n) {
+.add_assignment_constraints <- function(model, ps_by_i, n) {
   for (i_val in seq_len(n)) {
-    ps <- which(pair_i == i_val)
+    ps <- ps_by_i[[as.character(i_val)]]
     model <- model |>
       ompr::add_constraint(ompr::sum_over(x[p], p = ps) == 1)
   }
@@ -558,17 +534,17 @@ surveyzones_build_zones_single <- function(
 #' Each center cannot exceed the maximum workload.
 #'
 #' @param model An ompr MILP model.
+#' @param ps_by_j List mapping center index to sparse-pair indices.
 #' @param pair_i Integer vector mapping sparse pair index to tract index.
-#' @param pair_j Integer vector mapping sparse pair index to center index.
 #' @param w Numeric vector of tract workloads.
 #' @param m Integer. Number of candidate centers.
 #' @param max_workload_per_zone Numeric. Maximum workload per zone.
 #'
 #' @return Updated MILP model with capacity constraints.
 #' @keywords internal
-.add_capacity_constraints <- function(model, pair_i, pair_j, w, m, max_workload_per_zone) {
+.add_capacity_constraints <- function(model, ps_by_j, pair_i, w, m, max_workload_per_zone) {
   for (j_val in seq_len(m)) {
-    ps <- which(pair_j == j_val)
+    ps <- ps_by_j[[as.character(j_val)]]
     if (length(ps) > 0) {
       model <- model |>
         ompr::add_constraint(
@@ -621,7 +597,6 @@ surveyzones_build_zones_single <- function(
 #' @param full_sparse_distances Tibble of all distance pairs (unfiltered).
 #'   Will be filtered internally to D_max.
 #' @param K Integer.  Number of zones (centers) to open.
-#' @param candidates Character vector of candidate center tract_ids.
 #'
 #' @return A list with `assignments`, `zones`, and `diagnostics`.
 #' @keywords internal
@@ -631,7 +606,6 @@ surveyzones_solve_fixed_K <- function(
   K,
   D_max,
   max_workload_per_zone,
-  candidates,
   max_variables = 500000L,
   solver = "glpk",
   max_time = 300,
@@ -657,27 +631,20 @@ surveyzones_solve_fixed_K <- function(
       destination_id %in% part_ids
     )
 
-  # Candidate centers: indices into tract_ids
-  cand_idx <- which(tract_ids %in% candidates)
-  m <- length(cand_idx)
-
-  if (m == 0L) {
-    cli::cli_abort("No candidate centers available for this partition.")
-  }
+  # Candidate centers are all tracts
+  m <- n
 
   # Sparse pairs: (tract index i, candidate index j) where distance exists
   # Map IDs to indices
   tract_to_idx <- stats::setNames(seq_len(n), tract_ids)
-  cand_to_jdx <- stats::setNames(seq_along(cand_idx), tract_ids[cand_idx])
+  cand_to_jdx <- stats::setNames(seq_len(m), tract_ids)
 
-  # Keep only pairs where destination is a candidate
-  dt <- sparse_distances |>
-    dplyr::filter(destination_id %in% tract_ids[cand_idx])
+  dt <- sparse_distances
 
   # Also allow self-assignment (center assigned to itself with distance 0)
   self_pairs <- tibble::tibble(
-    origin_id = tract_ids[cand_idx],
-    destination_id = tract_ids[cand_idx],
+    origin_id = tract_ids,
+    destination_id = tract_ids,
     distance = 0
   )
   dt <- dplyr::bind_rows(dt, self_pairs) |>
@@ -704,7 +671,7 @@ surveyzones_solve_fixed_K <- function(
   n_cap <- if (capacitated) m else 0L
 
   cli::cli_alert_info(
-    "  K={K}: {n_x} x-variables, {m} candidates, {n} assignment constraints, {n_cap} capacity constraints"
+    "  K={K}: {n_x} x-variables, {m} potential centers, {n} assignment constraints, {n_cap} capacity constraints"
   )
 
   # Check that every tract can reach at least one candidate
@@ -715,30 +682,10 @@ surveyzones_solve_fixed_K <- function(
     cli::cli_alert_warning(
       "{length(unreachable)} tract{?s} unreachable: {.val {head(unreach_ids, 5)}}{if (length(unreach_ids) > 5) '...'}"
     )
-    return(list(
-      assignments = tibble::tibble(
-        tract_id = character(0),
-        zone_id = character(0),
-        partition_id = character(0),
-        center_id = character(0),
-        distance_to_center = numeric(0),
-        group_id = character(0)
-      ),
-      zones = tibble::tibble(
-        zone_id = character(0),
-        partition_id = character(0),
-        center_tract_id = character(0),
-        total_workload = numeric(0),
-        diameter = numeric(0),
-        n_tracts = integer(0),
-        group_id = character(0)
-      ),
-      diagnostics = list(
-        solver_status = "infeasible",
-        objective_value = NA_real_,
-        n_variables = as.integer(n_x),
-        solve_time = as.numeric(proc.time()["elapsed"] - start_time)
-      )
+    return(.empty_zone_solution(
+      solver_status = "infeasible",
+      n_variables = as.integer(n_x),
+      solve_time = as.numeric(proc.time()["elapsed"] - start_time)
     ))
   }
 
@@ -748,6 +695,8 @@ surveyzones_solve_fixed_K <- function(
   pair_i <- dt$i
   pair_j <- dt$j
   pair_d <- dt$distance
+  ps_by_i <- split(seq_len(n_x), pair_i)
+  ps_by_j <- split(seq_len(n_x), pair_j)
 
   # Workload for each tract
   w <- workload[tract_ids]
@@ -770,9 +719,9 @@ surveyzones_solve_fixed_K <- function(
     )
 
   # Add assignment and capacity constraints
-  model <- .add_assignment_constraints(model, pair_i, n)
+  model <- .add_assignment_constraints(model, ps_by_i, n)
   if (capacitated) {
-    model <- .add_capacity_constraints(model, pair_i, pair_j, w, m, max_workload_per_zone)
+    model <- .add_capacity_constraints(model, ps_by_j, pair_i, w, m, max_workload_per_zone)
   }
 
   # Solve with appropriate solver parameters
@@ -781,28 +730,24 @@ surveyzones_solve_fixed_K <- function(
     "  K={K}: Solving MILP with {solver_label} (max_time={max_time}s, rel_tol={rel_tol})..."
   )
   solve_t0 <- proc.time()[["elapsed"]]
-  params <- .solver_control_params(solver, max_time, rel_tol, verbose)
-  result <- ompr::solve_model(
-    model,
-    do.call(ompr.roi::with_ROI, params)
+  solved <- .solve_model_with_status(
+    model = model,
+    solver = solver,
+    max_time = max_time,
+    rel_tol = rel_tol,
+    verbose = verbose
   )
+  result <- solved$result
   solve_elapsed <- proc.time()[["elapsed"]] - solve_t0
 
   solve_time <- as.numeric(proc.time()["elapsed"] - start_time)
-  status <- ompr::solver_status(result)
-  # ROI returns "success" while other solvers return "optimal"
-  if (status == "success") {
-    status <- "optimal"
-  }
-  # Accept feasible solutions found within time limit (if finite objective)
-  if (status == "error") {
-    obj <- tryCatch(ompr::objective_value(result), error = function(e) Inf)
-    if (is.finite(obj)) {
-      cli::cli_alert_warning(
-        "  K={K}: solver hit time/gap limit but found a feasible solution (obj={round(obj, 2)})"
-      )
-      status <- "optimal"
-    }
+  raw_status <- solved$raw_status
+  status <- solved$status
+  obj_try <- solved$objective_value
+  if (status == "feasible" && raw_status != "feasible") {
+    cli::cli_alert_warning(
+      "  K={K}: solver returned {raw_status} but produced a feasible incumbent (obj={round(obj_try, 2)})"
+    )
   }
 
   obj_val <- tryCatch(round(ompr::objective_value(result), 2), error = function(e) NA_real_)
@@ -810,31 +755,11 @@ surveyzones_solve_fixed_K <- function(
     "  K={K}: solver returned {.val {status}} in {round(solve_elapsed, 1)}s, objective={obj_val}"
   )
 
-  if (status != "optimal") {
-    return(list(
-      assignments = tibble::tibble(
-        tract_id = character(0),
-        zone_id = character(0),
-        partition_id = character(0),
-        center_id = character(0),
-        distance_to_center = numeric(0),
-        group_id = character(0)
-      ),
-      zones = tibble::tibble(
-        zone_id = character(0),
-        partition_id = character(0),
-        center_tract_id = character(0),
-        total_workload = numeric(0),
-        diameter = numeric(0),
-        n_tracts = integer(0),
-        group_id = character(0)
-      ),
-      diagnostics = list(
-        solver_status = status,
-        objective_value = NA_real_,
-        n_variables = as.integer(n_x),
-        solve_time = solve_time
-      )
+  if (!.is_solution_status(status)) {
+    return(.empty_zone_solution(
+      solver_status = status,
+      n_variables = as.integer(n_x),
+      solve_time = solve_time
     ))
   }
 
@@ -851,30 +776,17 @@ surveyzones_solve_fixed_K <- function(
     cli::cli_alert_warning(
       "  K={K}: only {nrow(active)}/{n} tracts assigned, treating as infeasible"
     )
-    return(list(
-      assignments = tibble::tibble(
-        tract_id = character(0), zone_id = character(0),
-        partition_id = character(0), center_id = character(0),
-        distance_to_center = numeric(0), group_id = character(0)
-      ),
-      zones = tibble::tibble(
-        zone_id = character(0), partition_id = character(0),
-        center_tract_id = character(0), total_workload = numeric(0),
-        diameter = numeric(0), n_tracts = integer(0), group_id = character(0)
-      ),
-      diagnostics = list(
-        solver_status = "infeasible",
-        objective_value = NA_real_,
-        n_variables = as.integer(n_x),
-        solve_time = solve_time
-      )
+    return(.empty_zone_solution(
+      solver_status = "infeasible",
+      n_variables = as.integer(n_x),
+      solve_time = solve_time
     ))
   }
 
   # Build assignments with all columns in dplyr pipeline
   assignments <- tibble::tibble(
     tract_id = tract_ids[pair_i[active$p]],
-    center_id = tract_ids[cand_idx[pair_j[active$p]]],
+    center_id = tract_ids[pair_j[active$p]],
     distance_to_center = pair_d[active$p]
   ) |>
     dplyr::mutate(
@@ -932,7 +844,6 @@ surveyzones_solve_fixed_K <- function(
 #' @inheritParams surveyzones_build_zones
 #' @param K0 Integer. Initial number of zones (lower bound).
 #' @param K_max Integer. Safety cap on number of zones.
-#' @param candidates Character vector of candidate center tract_ids.
 #' @return A list with `assignments`, `zones`, and `diagnostics`.
 #' @keywords internal
 .uncap_then_split <- function(
@@ -942,7 +853,6 @@ surveyzones_solve_fixed_K <- function(
   K_max,
   D_max,
   max_workload_per_zone,
-  candidates,
   max_variables,
   solver,
   max_time,
@@ -965,24 +875,24 @@ surveyzones_solve_fixed_K <- function(
       K = K,
       D_max = D_max,
       max_workload_per_zone = Inf,
-      candidates = candidates,
       max_variables = max_variables,
       solver = solver,
       max_time = max_time,
       rel_tol = rel_tol,
       verbose = verbose
     )
-    if (uncap_result$diagnostics$solver_status == "optimal") {
+    if (.is_solution_status(uncap_result$diagnostics$solver_status)) {
       cli::cli_alert_success("Uncapacitated solve feasible at K = {K}")
       break
     }
     cli::cli_alert_warning("Uncapacitated K = {K} failed (status: {uncap_result$diagnostics$solver_status})")
   }
 
-  if (uncap_result$diagnostics$solver_status != "optimal") {
+  if (!.is_solution_status(uncap_result$diagnostics$solver_status)) {
     cli::cli_alert_danger("Uncapacitated solve failed for all K in {K0}..{K_max}")
     return(uncap_result)
   }
+  overall_status <- uncap_result$diagnostics$solver_status
 
   # Phase 2: find oversized zones and split them
   workload_by_tract <- stats::setNames(
@@ -1027,8 +937,20 @@ surveyzones_solve_fixed_K <- function(
     zone_wl <- sum(workload_by_tract[zone_tract_ids])
     K_split <- ceiling(zone_wl / max_workload_per_zone)
 
+    n_tracts_in_zone <- length(zone_tract_ids)
+    if (K_split > n_tracts_in_zone) {
+      cli::cli_alert_danger(
+        "  Zone {zid} cannot be split under cap: minimum K={K_split} exceeds tract count {n_tracts_in_zone}"
+      )
+      return(.empty_zone_solution(
+        solver_status = "infeasible",
+        n_variables = uncap_result$diagnostics$n_variables,
+        solve_time = proc.time()[["elapsed"]] - start_time
+      ))
+    }
+
     cli::cli_alert_info(
-      "  Splitting zone {zid} ({length(zone_tract_ids)} tracts, wl={round(zone_wl,1)}) into K={K_split}"
+      "  Splitting zone {zid} ({n_tracts_in_zone} tracts, wl={round(zone_wl,1)}) into K={K_split}"
     )
 
     sub_dist <- full_sparse_distances |>
@@ -1037,34 +959,47 @@ surveyzones_solve_fixed_K <- function(
         .data$destination_id %in% zone_tract_ids
       )
 
-    # Sub-problem is tiny: use direct capacitated MILP (fast for small n)
-    sub_result <- surveyzones_solve_fixed_K(
-      full_sparse_distances = sub_dist,
-      tracts = zone_tracts,
-      K = K_split,
-      D_max = D_max,
-      max_workload_per_zone = max_workload_per_zone,
-      candidates = zone_tract_ids,
-      max_variables = max_variables,
-      solver = solver,
-      max_time = max_time,
-      rel_tol = rel_tol,
-      verbose = verbose
-    )
-
-    if (sub_result$diagnostics$solver_status != "optimal") {
-      cli::cli_alert_warning(
-        "  Split of zone {zid} failed - keeping original oversized zone"
+    # Try increasing K until feasible (at K = n_tracts, trivially feasible)
+    sub_result <- NULL
+    for (K_try in seq.int(K_split, n_tracts_in_zone)) {
+      if (K_try > K_split) {
+        cli::cli_alert_info(
+          "  Retrying zone {zid} with K={K_try}"
+        )
+      }
+      sub_result <- surveyzones_solve_fixed_K(
+        full_sparse_distances = sub_dist,
+        tracts = zone_tracts,
+        K = K_try,
+        D_max = D_max,
+        max_workload_per_zone = max_workload_per_zone,
+        max_variables = max_variables,
+        solver = solver,
+        max_time = max_time,
+        rel_tol = rel_tol,
+        verbose = verbose
       )
-      kept_asgn <- uncap_result$assignments |>
-        dplyr::filter(.data$zone_id == zid) |>
-        dplyr::mutate(group_id = zid)
-      kept_zones <- uncap_result$zones |>
-        dplyr::filter(.data$zone_id == zid) |>
-        dplyr::mutate(group_id = zid)
-      good_assignments <- dplyr::bind_rows(good_assignments, kept_asgn)
-      good_zones <- dplyr::bind_rows(good_zones, kept_zones)
+      if (.is_solution_status(sub_result$diagnostics$solver_status)) break
+    }
+
+    if (!.is_solution_status(sub_result$diagnostics$solver_status)) {
+      cli::cli_alert_danger(
+        "  Split of zone {zid} failed after trying K={K_split}..{n_tracts_in_zone}; cannot satisfy workload cap"
+      )
+      return(.empty_zone_solution(
+        solver_status = "infeasible",
+        n_variables = uncap_result$diagnostics$n_variables,
+        solve_time = proc.time()[["elapsed"]] - start_time
+      ))
     } else {
+      if (sub_result$diagnostics$solver_status == "feasible") {
+        overall_status <- "feasible"
+      }
+      if (K_try > K_split) {
+        cli::cli_alert_success(
+          "  Zone {zid} split succeeded at K={K_try} (minimum K={K_split} was infeasible)"
+        )
+      }
       # Tag split sub-zones with parent phase-1 zone as group_id
       split_assignments[[idx]] <- sub_result$assignments |>
         dplyr::mutate(group_id = zid)
@@ -1091,13 +1026,57 @@ surveyzones_solve_fixed_K <- function(
     assignments = final_assignments,
     zones = final_zones,
     diagnostics = list(
-      solver_status = "optimal",
+      solver_status = overall_status,
       objective_value = sum(final_assignments$distance_to_center, na.rm = TRUE),
       n_variables = uncap_result$diagnostics$n_variables,
       solve_time = elapsed
     )
   )
 }
+
+
+#' @keywords internal
+.symmetrize_distances_max <- function(distance_table) {
+  if (nrow(distance_table) == 0L) {
+    return(tibble::tibble(
+      origin_id = character(0),
+      destination_id = character(0),
+      distance = numeric(0)
+    ))
+  }
+
+  undirected <- distance_table |>
+    dplyr::transmute(
+      origin_id = as.character(.data$origin_id),
+      destination_id = as.character(.data$destination_id),
+      distance = .data$distance
+    ) |>
+    dplyr::filter(.data$origin_id != .data$destination_id) |>
+    dplyr::mutate(
+      a = pmin(.data$origin_id, .data$destination_id),
+      b = pmax(.data$origin_id, .data$destination_id)
+    ) |>
+    dplyr::summarise(
+      distance = {
+        d <- .data$distance[is.finite(.data$distance)]
+        if (length(d) == 0L) NA_real_ else max(d)
+      },
+      .by = c("a", "b")
+    ) |>
+    dplyr::filter(is.finite(.data$distance))
+
+  dplyr::bind_rows(
+    undirected |>
+      dplyr::transmute(origin_id = .data$a, destination_id = .data$b, distance = .data$distance),
+    undirected |>
+      dplyr::transmute(origin_id = .data$b, destination_id = .data$a, distance = .data$distance)
+  ) |>
+    dplyr::distinct(.data$origin_id, .data$destination_id, .keep_all = TRUE)
+}
+
+
+
+
 
 
 #' Compute Zone Diameter
@@ -1207,6 +1186,20 @@ validate_tracts <- function(tracts, call = rlang::caller_env()) {
   if (!is.numeric(tracts$expected_service_time)) {
     cli::cli_abort(
       "{.field expected_service_time} must be numeric.",
+      call = call
+    )
+  }
+
+  if (anyNA(tracts$expected_service_time)) {
+    cli::cli_abort(
+      "{.field expected_service_time} must not contain NA values.",
+      call = call
+    )
+  }
+
+  if (any(!is.finite(tracts$expected_service_time))) {
+    cli::cli_abort(
+      "{.field expected_service_time} must be finite for all tracts.",
       call = call
     )
   }

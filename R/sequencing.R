@@ -1,9 +1,13 @@
 #' Sequence Zones and Tracts in a Plan
 #'
-#' Computes a spatial visit order at two levels: (1) zones within each
-#' partition via TSP on minimum pairwise tract distances, and (2) tracts
-#' within each zone via seriation.  Tract sequences are oriented so that
-#' each zone's entry tract is closest to the previous zone's exit tract.
+#' Computes a spatial visit order at three hierarchical levels:
+#' (1) **groups** within each partition via TSP on minimum pairwise
+#' tract distances between group representatives,
+#' (2) **zones** within each group via TSP on minimum pairwise tract
+#' distances, and (3) **tracts** within each zone via TSP.
+#' Tract sequences are oriented so that each zone's entry tract is
+#' closest to the previous zone's exit tract.  At the end, zone IDs
+#' are renamed to `{partition}_{group}.{position}` format.
 #'
 #' @param plan A `surveyzones_plan` object.
 #' @param sparse_distances Sparse distance table (as returned by

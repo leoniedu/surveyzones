@@ -10,7 +10,6 @@ surveyzones_build_zones_single(
   D_max,
   max_workload_per_zone = Inf,
   K_max,
-  candidates,
   max_variables = 500000L,
   solver = "glpk",
   max_time = 300,
@@ -35,8 +34,6 @@ to \code{Inf} (uncapacitated).}
 
 \item{K_max}{Integer.  Safety cap on the number of zones per
 partition.}
-
-\item{candidates}{Character vector of candidate center tract_ids.}
 
 \item{max_variables}{Integer.  Safety limit on the number of
 x variables in the MILP.  Aborts if exceeded.}
