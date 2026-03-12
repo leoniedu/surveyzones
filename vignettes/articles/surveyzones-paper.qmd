@@ -257,17 +257,19 @@ strategy, `uncap_then_split`, decouples the $K$-search from workload balancing
 by producing a **three-level hierarchy: travel groups $\to$ zones $\to$
 tracts**.
 
-Algorithm 1: uncap_then_split
+Algorithm 1: uncap_then_split (outline; details in Phases 1--2 below)
 
-1. Filter edges with d_ik ≤ Dmax
-2. Identify connected components
-3. For each component:
-      for K = 1,2,... until feasible:
-           solve uncapacitated p-median
-4. For each group:
-      if workload > Wmax:
-           solve capacitated p-median
-5. Return zones
+1. Filter edges: retain only $(i, k)$ pairs with $d_{ik} \leq D_{\max}$
+2. Identify connected components in the filtered graph
+3. **Phase 1** --- For each component:
+      for $K = 1, 2, \ldots$ until the uncapacitated MILP is feasible
+      (i.e., all tracts assigned to a center within $D_{\max}$):
+           solve uncapacitated p-median $\to$ **travel groups**
+4. **Phase 2** --- For each travel group with $\sum_i s_i > W_{\max}$:
+      set $K_{\text{split}} = \lceil \sum_i s_i / W_{\max} \rceil$;
+      solve capacitated p-median; increment $K_{\text{split}}$ on infeasibility
+      $\to$ **zones**
+5. Return zones (groups within capacity become single-zone groups)
 
 
 ### Phase 1: Geographic grouping
@@ -281,8 +283,9 @@ Starting from 1 rather than a workload-derived lower bound $\lceil n /
 W_{\max} \rceil$ is deliberate: Phase 1 ignores workload entirely and seeks the
 minimum $K$ for geographic feasibility alone, which may be much smaller. (When
 the $D_{\max}$ graph contains $C$ disconnected components, $K \geq C$ is a
-necessary condition for feasibility; connectivity analysis in Stage 2 already
-identifies these components, and each is solved independently.)
+necessary condition for feasibility; the connectivity analysis from the
+pipeline's Stage 2 already identifies these components, and each is solved
+independently.)
 
 $$K^*_{\text{uncap}} = \min \{ K \geq 1 : \text{uncapacitated MILP feasible} \}$$
 
@@ -339,31 +342,26 @@ each) and solved independently. Third, the resulting travel group structure
 provides a natural hierarchy for downstream sequencing and for human-readable
 zone identifiers.
 
-### Possible extension: direct capacitated solve with post-hoc grouping {#sec-direct}
+### Alternative strategy: direct capacitated solve {#sec-direct}
 
 An alternative `direct` strategy solves the full capacitated p-median MILP
 directly, incrementing $K$ from a workload-derived lower bound $\lceil
 W_{\text{total}} / W_{\max} \rceil$. This produces the minimum number of
 zones under both constraints---potentially fewer than `uncap_then_split`---but
-does not inherently produce a group hierarchy.
+does not inherently produce a group hierarchy. Groups can be recovered
+post-hoc via a lightweight set cover problem: given the fixed zones, find the
+fewest group centers such that every zone's tracts are within $D_{\max}$ of
+their group center. Since every zone center already covers its own zone (the
+trivial solution $K_{\text{groups}} = K_{\text{zones}}$ is always feasible),
+set cover minimizes over this upper bound.
 
-One possible extension is to recover groups after the direct solve via a
-lightweight set cover problem: given the fixed zones, find the fewest group
-centers such that every zone's tracts are within $D_{\max}$ of their group
-center. This post-processing set-cover layer is not required by the current
-core workflow and is presented here as an extension.
-Since every zone center already covers its own zone (the trivial solution
-$K_{\text{groups}} = K_{\text{zones}}$ is always feasible), set cover
-minimizes over this upper bound. The problem is tiny
-($\sim$10--30 zones per partition) and can be solved in milliseconds.
-
-The two strategies therefore represent different lexicographic priorities:
+The two strategies represent different lexicographic priorities:
 
 - **`uncap_then_split`** (group-first): minimise groups, then split for
   capacity. Produces the fewest, largest groups at the cost of potentially
   more zones.
-- **`direct`** (zone-first): minimise zones under capacity. If needed,
-  groups may be added post-hoc as an extension.
+- **`direct`** (zone-first): minimise zones under capacity, then recover
+  groups post-hoc.
 
 The choice depends on operational priorities: when field coordination at the
 group level dominates (e.g., team assignment, logistics planning), the
@@ -861,29 +859,16 @@ seconds). These timings include the full `uncap_then_split` pipeline
 
 ## Contributions
 
-The contribution of surveyzones is not a new facility location formulation but an operational framework that combines radius-constrained assignment, capacity constraints, and a K-feasibility search within a decomposition architecture tailored to large survey zoning problems. 
-It implements a decomposition strategy that separates geographic feasibility from workload bounding: an uncapacitated p-median is used to identify the smallest K for which assignment under a radius constraint is feasible, after which capacitated subproblems enforce workload limits. This decomposition converts a large capacitated location problem into a sequence of smaller tractable problems while preserving operational interpretability.
-
-The two-phase `uncap_then_split` decomposition is a practical contribution:
-by decoupling geographic feasibility from workload bounding, it avoids
-solving a large capacitated MILP directly. Phase 1 converges quickly (the
-uncapacitated problem is smaller and the $K$-search only requires geographic
-feasibility), and Phase 2 sub-problems are tiny. The resulting travel group
-hierarchy provides a natural structure for three-level sequencing and for
-human-readable zone identifiers.
+The contribution of surveyzones is not a new facility location formulation but an operational framework that combines radius-constrained assignment, capacity constraints, and automatic $K$-determination within a decomposition architecture tailored to survey zoning problems. The `uncap_then_split` decomposition (@sec-k-discovery) converts a large capacitated location problem into a sequence of smaller tractable sub-problems while producing a travel group hierarchy that supports three-level sequencing and human-readable zone identifiers.
 
 ## Partitioning as an operational tool
 
-The `enforce_partition` mechanism deserves emphasis. In the census tract
-example, partitioning by favela status ensures that field teams assigned to
-informal settlements operate exclusively within that context---a requirement
-driven by distinct interviewer training, security protocols, and access
-logistics. In the PNS application, partitioning by state ensures that zones do
-not cross jurisdictional boundaries. The partitioning is flexible: it can be
-extended to other criteria such as agency jurisdiction (ensuring that UPAs
-from distinct agencies are never grouped together) or area type (solving
-favelas separately from regular urban areas, given substantially different
-access and travel time profiles).
+The `enforce_partition` mechanism is flexible beyond the two applications
+demonstrated here: it can encode any categorical constraint---agency
+jurisdiction (ensuring that UPAs from distinct agencies are never grouped
+together), area type (solving favelas separately from regular urban areas,
+given substantially different access and travel time profiles), or
+administrative boundaries---without changes to the solver pipeline.
 
 ## Limitations and possible extensions
 
