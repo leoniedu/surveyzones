@@ -9,9 +9,7 @@ surveyzones_build_zones(
   tracts,
   D_max,
   max_workload_per_zone = Inf,
-  K_max = NULL,
   enforce_partition = TRUE,
-  max_variables = 500000L,
   solver = "glpk",
   max_time = 300,
   rel_tol = 0.01,
@@ -37,19 +35,15 @@ before solving.}
 the sum of \code{expected_service_time} within any zone.  Defaults
 to \code{Inf} (uncapacitated).}
 
-\item{K_max}{Integer.  Safety cap on the number of zones per
-partition.}
-
 \item{enforce_partition}{Logical.  Whether to split by
 \code{partition_id} (default \code{TRUE}).}
 
-\item{max_variables}{Integer.  Safety limit on the number of
-x variables in the MILP.  Aborts if exceeded.}
-
-\item{solver}{Character scalar.  Which MILP solver backend to use.
-One of \code{"glpk"} (default), \code{"highs"}, or \code{"cbc"}.  The
-corresponding ROI plugin package must be installed (e.g.,
-\code{ROI.plugin.highs}).}
+\item{solver}{Character scalar.  Which solver backend to use.
+MILP solvers: \code{"glpk"} (default), \code{"highs"}, \code{"cbc"}, \code{"symphony"}
+(requires the corresponding ROI plugin, e.g. \code{ROI.plugin.highs}).
+Use \code{"spopt"} to delegate to \code{\link[spopt:allocate_zones]{spopt::allocate_zones()}} which uses
+a Rust/HiGHS backend (much faster for large problems; requires the
+\code{spopt} package).}
 
 \item{max_time}{Numeric scalar.  Maximum seconds to spend solving each
 partition. Default \code{300}.}

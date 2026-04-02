@@ -11,6 +11,7 @@ Description: Constructs compact, workload-balanced geographic zones for
     to zones, and sequences visits within each zone. Supports partitioning
     by jurisdiction and parameter sweeps for scenario comparison.
 License: MIT + file LICENSE
+Depends: R (>= 4.1.0)
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
@@ -38,8 +39,9 @@ Suggests:
     dodgr,
     duckdb,
     geodist,
-    googleway,
     htmltools,
+    httr2,
+    jsonlite,
     leaflet,
     mapgl,
     osrm,
@@ -49,6 +51,7 @@ Suggests:
     ROI.plugin.highs,
     spatstat.explore,
     spatstat.geom,
+    spopt,
     testthat (>= 3.0.0),
     withr
 Config/testthat/edition: 3

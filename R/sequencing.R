@@ -330,8 +330,7 @@ surveyzones_sequence <- function(
   plan$assignments$zone_id   <- unname(id_map[plan$assignments$zone_id])
   plan$sequence$zone_id      <- unname(id_map[plan$sequence$zone_id])
 
-  # Drop character group_id from assignments (redundant with zones$center_tract_id)
-  plan$assignments <- dplyr::select(plan$assignments, -dplyr::any_of("group_id"))
+  # Keep group_id in assignments (useful for downstream coloring/grouping)
 
   plan
 }

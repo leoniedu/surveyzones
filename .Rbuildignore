@@ -3,4 +3,7 @@
 ^LICENSE\.md$
 ^\.claude$
 ^\.\.Rcheck$
+^\.worktrees$
+^docs$
 ^vignettes/articles$
+^vignettes/.*_files$

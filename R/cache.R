@@ -33,7 +33,7 @@ surveyzones_clear_cache <- function(force = FALSE) {
     }
   }
 
-  memoise::forget(surveyzones_build_zones_mem)
+  memoise::forget(surveyzones_build_zones_single_mem)
   cli::cli_alert_success("Cache cleared ({size} freed).")
   invisible(TRUE)
 }

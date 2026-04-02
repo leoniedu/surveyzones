@@ -2,11 +2,11 @@
 % Please edit documentation in R/engine.R
 \name{surveyzones_engine_google}
 \alias{surveyzones_engine_google}
-\title{Create a Google Maps Distance Matrix Engine}
+\title{Create a Google Routes API Distance Engine}
 \usage{
 surveyzones_engine_google(
   measure = c("duration", "distance"),
-  mode = c("driving", "walking", "bicycling", "transit"),
+  travel_mode = c("DRIVE", "WALK", "BICYCLE", "TRANSIT"),
   key = NULL,
   batch_size = 25L
 )
@@ -15,16 +15,16 @@ surveyzones_engine_google(
 \item{measure}{Character scalar.  One of \code{"duration"} (default, in
 minutes) or \code{"distance"} (in km).}
 
-\item{mode}{Character scalar.  One of \code{"driving"} (default),
-\code{"walking"}, \code{"bicycling"}, or \code{"transit"}.}
+\item{travel_mode}{Character scalar.  One of \code{"DRIVE"} (default),
+\code{"WALK"}, \code{"BICYCLE"}, or \code{"TRANSIT"}.}
 
-\item{key}{Google Maps API key.  Defaults to the key set via
-\code{\link[googleway:set_key]{googleway::set_key()}}.}
+\item{key}{Google Maps API key.  If \code{NULL}, reads from the
+environment variable \code{GOOGLE_MAPS_API_KEY}.}
 
 \item{batch_size}{Integer scalar.  Maximum number of origins or
-destinations per API request.  The Google Distance Matrix API
-allows at most 25 origins or 25 destinations per call; results
-are stitched together transparently.}
+destinations per API request.  The Routes API allows up to 25
+origins and 25 destinations per call (625 elements); results are
+stitched together transparently.}
 }
 \value{
 A function with signature
@@ -33,12 +33,16 @@ matrix of travel times (minutes) or distances (km).
 }
 \description{
 Returns a function that computes travel times or distances using
-the Google Maps Distance Matrix API via
-\code{\link[googleway:google_distance]{googleway::google_distance()}}.
+the Google Routes API \code{computeRouteMatrix} endpoint via
+\link[httr2:httr2-package]{httr2}.
 }
 \details{
-The Google Distance Matrix API is a paid service.  Each element
-(origin-destination pair) is billed; see
-\url{https://developers.google.com/maps/documentation/distance-matrix/usage-and-billing}
+Uses the Routes API \code{computeRouteMatrix} endpoint
+(\url{https://developers.google.com/maps/documentation/routes/compute_route_matrix}).
+Each element (origin-destination pair) is billed; see
+\url{https://developers.google.com/maps/documentation/routes/usage-and-billing}
 for current pricing.
+
+Requires the \strong{Routes API} to be enabled in your Google Cloud
+project (not the legacy Distance Matrix API).
 }

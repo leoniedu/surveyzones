@@ -69,56 +69,72 @@ surveyzones_engine_osrm <- function(measure = c("duration", "distance"),
 }
 
 
-#' Create a Google Maps Distance Matrix Engine
+#' Create a Google Routes API Distance Engine
 #'
 #' Returns a function that computes travel times or distances using
-#' the Google Maps Distance Matrix API via
-#' [googleway::google_distance()].
+#' the Google Routes API `computeRouteMatrix` endpoint via
+#' [httr2][httr2::httr2-package].
 #'
 #' @param measure Character scalar.  One of `"duration"` (default, in
 #'   minutes) or `"distance"` (in km).
-#' @param mode Character scalar.  One of `"driving"` (default),
-#'   `"walking"`, `"bicycling"`, or `"transit"`.
-#' @param key Google Maps API key.  Defaults to the key set via
-#'   [googleway::set_key()].
+#' @param travel_mode Character scalar.  One of `"DRIVE"` (default),
+#'   `"WALK"`, `"BICYCLE"`, or `"TRANSIT"`.
+#' @param key Google Maps API key.  If `NULL`, reads from the
+#'   environment variable `GOOGLE_MAPS_API_KEY`.
 #' @param batch_size Integer scalar.  Maximum number of origins or
-#'   destinations per API request.  The Google Distance Matrix API
-#'   allows at most 25 origins or 25 destinations per call; results
-#'   are stitched together transparently.
+#'   destinations per API request.  The Routes API allows up to 25
+#'   origins and 25 destinations per call (625 elements); results are
+#'   stitched together transparently.
 #'
 #' @return A function with signature
 #'   `function(origins, destinations)` that returns an n x m numeric
 #'   matrix of travel times (minutes) or distances (km).
 #'
 #' @details
-#' The Google Distance Matrix API is a paid service.  Each element
-#' (origin-destination pair) is billed; see
-#' <https://developers.google.com/maps/documentation/distance-matrix/usage-and-billing>
+#' Uses the Routes API `computeRouteMatrix` endpoint
+#' (<https://developers.google.com/maps/documentation/routes/compute_route_matrix>).
+#' Each element (origin-destination pair) is billed; see
+#' <https://developers.google.com/maps/documentation/routes/usage-and-billing>
 #' for current pricing.
+#'
+#' Requires the **Routes API** to be enabled in your Google Cloud
+#' project (not the legacy Distance Matrix API).
 #'
 #' @export
 surveyzones_engine_google <- function(measure = c("duration", "distance"),
-                                      mode = c("driving", "walking",
-                                               "bicycling", "transit"),
+                                      travel_mode = c("DRIVE", "WALK",
+                                                      "BICYCLE", "TRANSIT"),
                                       key = NULL,
                                       batch_size = 25L) {
-  rlang::check_installed("googleway",
-                         reason = "to use the Google Maps distance engine")
+  rlang::check_installed("httr2",
+                         reason = "to use the Google Routes distance engine")
+  rlang::check_installed("jsonlite",
+                         reason = "to use the Google Routes distance engine")
   measure <- match.arg(measure)
-  mode <- match.arg(mode)
+  travel_mode <- match.arg(travel_mode)
   batch_size <- as.integer(batch_size)
 
+  key <- key %||% Sys.getenv("GOOGLE_MAPS_API_KEY", unset = "")
+  if (!nzchar(key)) {
+    cli::cli_abort(c(
+      "No Google Maps API key found.",
+      "i" = "Set {.envvar GOOGLE_MAPS_API_KEY} or pass {.arg key} directly."
+    ))
+  }
+
+  field_mask <- if (measure == "duration") {
+    "originIndex,destinationIndex,duration"
+  } else {
+    "originIndex,destinationIndex,distanceMeters"
+  }
+
   function(origins, destinations) {
-    # Extract coordinates as lat/lon data.frames
     orig_coords <- sf::st_coordinates(origins)
     dest_coords <- sf::st_coordinates(destinations)
-    orig_df <- data.frame(lat = orig_coords[, 2], lon = orig_coords[, 1])
-    dest_df <- data.frame(lat = dest_coords[, 2], lon = dest_coords[, 1])
 
-    n_orig <- nrow(orig_df)
-    n_dest <- nrow(dest_df)
+    n_orig <- nrow(orig_coords)
+    n_dest <- nrow(dest_coords)
 
-    # Batch origins and destinations to stay within API limits
     orig_batches <- split(seq_len(n_orig),
                           ceiling(seq_len(n_orig) / batch_size))
     dest_batches <- split(seq_len(n_dest),
@@ -128,35 +144,56 @@ surveyzones_engine_google <- function(measure = c("duration", "distance"),
 
     for (oi in orig_batches) {
       for (di in dest_batches) {
-        api_args <- list(
-          origins      = orig_df[oi, , drop = FALSE],
-          destinations = dest_df[di, , drop = FALSE],
-          mode         = mode
+        body <- list(
+          origins = lapply(oi, function(i) {
+            list(waypoint = list(location = list(latLng = list(
+              latitude  = orig_coords[i, 2],
+              longitude = orig_coords[i, 1]
+            ))))
+          }),
+          destinations = lapply(di, function(j) {
+            list(waypoint = list(location = list(latLng = list(
+              latitude  = dest_coords[j, 2],
+              longitude = dest_coords[j, 1]
+            ))))
+          }),
+          travelMode = travel_mode
         )
-        if (!is.null(key)) api_args$key <- key
 
-        res <- do.call(googleway::google_distance, api_args)
+        resp <- httr2::request(
+          "https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix"
+        ) |>
+          httr2::req_headers(
+            `X-Goog-Api-Key`  = key,
+            `X-Goog-FieldMask` = field_mask,
+            `Content-Type`    = "application/json"
+          ) |>
+          httr2::req_body_json(body) |>
+          httr2::req_error(is_error = function(r) FALSE) |>
+          httr2::req_perform()
 
-        if (!identical(res$status, "OK")) {
+        if (httr2::resp_status(resp) != 200L) {
           cli::cli_abort(
-            "Google Distance Matrix API returned status {.val {res$status}}."
+            "Routes API returned HTTP {.val {httr2::resp_status(resp)}}: {httr2::resp_body_string(resp)}"
           )
         }
 
-        # Parse the nested rows/elements structure
-        for (i in seq_along(oi)) {
-          elements <- res$rows$elements[[i]]
+        # Response is a JSON array of route matrix elements
+        elements <- jsonlite::fromJSON(httr2::resp_body_string(resp))
+
+        for (row_idx in seq_len(nrow(elements))) {
+          el <- elements[row_idx, ]
+          # API returns 0-based indices
+          oi_idx <- el$originIndex + 1L
+          di_idx <- el$destinationIndex + 1L
+
           if (measure == "duration") {
-            values <- elements$duration$value  # seconds
-            values <- values / 60              # -> minutes
+            # duration is a string like "123s"
+            secs <- as.numeric(sub("s$", "", el$duration))
+            result_mat[oi[oi_idx], di[di_idx]] <- secs / 60
           } else {
-            values <- elements$distance$value  # meters
-            values <- values / 1000            # -> km
+            result_mat[oi[oi_idx], di[di_idx]] <- el$distanceMeters / 1000
           }
-          # NA for non-OK element status
-          statuses <- elements$status
-          values[statuses != "OK"] <- NA_real_
-          result_mat[oi[i], di] <- values
         }
       }
     }

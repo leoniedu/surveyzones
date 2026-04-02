@@ -13,10 +13,16 @@ utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tra
   if (!.is_solution_status(status) && is.finite(obj)) {
     status <- "feasible"
   }
+  optimality_gap <- tryCatch(
+    result$additional_solver_output$ROI$message$info$mip_gap,
+    error = function(e) NA_real_
+  )
+  if (is.null(optimality_gap)) optimality_gap <- NA_real_
   list(
     status = status,
     raw_status = raw_status,
-    objective_value = obj
+    objective_value = obj,
+    optimality_gap = as.numeric(optimality_gap)
   )
 }
 
@@ -60,7 +66,8 @@ utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tra
       solver_status = solver_status,
       objective_value = objective_value,
       n_variables = n_variables,
-      solve_time = solve_time
+      solve_time = solve_time,
+      optimality_gap = NA_real_
     )
   )
 }
@@ -71,17 +78,26 @@ utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tra
   tracts,
   D_max,
   max_workload_per_zone = Inf,
-  K_max = NULL,
   enforce_partition = TRUE,
-  max_variables = 500000L,
   solver = "glpk",
   max_time = 300,
   rel_tol = 0.01,
   verbose = FALSE,
-  strategy = "auto"
+  strategy = "auto",
+  use_cache = TRUE
 ) {
+  # Coerce to numeric — integer D_max can cause solver infeasibility
+  D_max <- as.numeric(D_max)
+  max_workload_per_zone <- as.numeric(max_workload_per_zone)
+
   validate_tracts(tracts)
   validate_solver(solver)
+
+  solve_single <- if (use_cache) {
+    surveyzones_build_zones_single_mem
+  } else {
+    surveyzones_build_zones_single
+  }
 
   # Count distances before and after D_max filtering
   n_before <- nrow(sparse_distances)
@@ -117,16 +133,35 @@ utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tra
 
     cli::cli_alert_info("Candidate centers: {length(part_ids)} (all tracts)")
 
-    k_max_part <- K_max %||% nrow(part_tracts)
+    # Report cache status for this partition
+    if (use_cache) {
+      single_args <- list(
+        full_sparse_distances = part_full_dist,
+        tracts = part_tracts,
+        D_max = D_max,
+        max_workload_per_zone = max_workload_per_zone,
+        solver = solver,
+        max_time = max_time,
+        rel_tol = rel_tol,
+        verbose = verbose,
+        strategy = strategy
+      )
+      is_cached <- do.call(
+        memoise::has_cache(surveyzones_build_zones_single_mem),
+        single_args
+      )
+      if (is_cached) {
+        cli::cli_alert_success("Partition {pid}: using cached result.")
+      } else {
+        cli::cli_alert_info("Partition {pid}: computing and caching result.")
+      }
+    }
 
-    result <- surveyzones_build_zones_single(
+    result <- solve_single(
       full_sparse_distances = part_full_dist,
       tracts = part_tracts,
       D_max = D_max,
       max_workload_per_zone = max_workload_per_zone,
-
-      K_max = k_max_part,
-      max_variables = max_variables,
       solver = solver,
       max_time = max_time,
       rel_tol = rel_tol,
@@ -161,13 +196,13 @@ utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tra
     solver_status = purrr::map_chr(results, \(r) r$diagnostics$solver_status),
     objective_value = purrr::map_dbl(results, \(r) r$diagnostics$objective_value),
     n_variables = purrr::map_int(results, \(r) r$diagnostics$n_variables),
-    solve_time = purrr::map_dbl(results, \(r) r$diagnostics$solve_time)
+    solve_time = purrr::map_dbl(results, \(r) r$diagnostics$solve_time),
+    optimality_gap = purrr::map_dbl(results, \(r) r$diagnostics$optimality_gap)
   )
 
   parameters <- list(
     D_max = D_max,
     max_workload_per_zone = max_workload_per_zone,
-    K_max = K_max,
     enforce_partition = enforce_partition,
     solver = solver,
     timestamp = Sys.time()
@@ -204,16 +239,14 @@ utils::globalVariables(c("center_tract_id", "total_workload", "diameter", "n_tra
 #' @param max_workload_per_zone Numeric scalar.  Upper bound on
 #'   the sum of `expected_service_time` within any zone.  Defaults
 #'   to `Inf` (uncapacitated).
-#' @param K_max Integer.  Safety cap on the number of zones per
-#'   partition.
 #' @param enforce_partition Logical.  Whether to split by
 #'   `partition_id` (default `TRUE`).
-#' @param max_variables Integer.  Safety limit on the number of
-#'   x variables in the MILP.  Aborts if exceeded.
-#' @param solver Character scalar.  Which MILP solver backend to use.
-#'   One of `"glpk"` (default), `"highs"`, or `"cbc"`.  The
-#'   corresponding ROI plugin package must be installed (e.g.,
-#'   `ROI.plugin.highs`).
+#' @param solver Character scalar.  Which solver backend to use.
+#'   MILP solvers: `"glpk"` (default), `"highs"`, `"cbc"`, `"symphony"`
+#'   (requires the corresponding ROI plugin, e.g. `ROI.plugin.highs`).
+#'   Use `"spopt"` to delegate to [spopt::allocate_zones()] which uses
+#'   a Rust/HiGHS backend (much faster for large problems; requires the
+#'   `spopt` package).
 #' @param max_time Numeric scalar.  Maximum seconds to spend solving each
 #'   partition. Default `300`.
 #' @param rel_tol Numeric scalar.  Relative tolerance for solver convergence.
@@ -242,9 +275,7 @@ surveyzones_build_zones <- function(
   tracts,
   D_max,
   max_workload_per_zone = Inf,
-  K_max = NULL,
   enforce_partition = TRUE,
-  max_variables = 500000L,
   solver = "glpk",
   max_time = 300,
   rel_tol = 0.01,
@@ -253,33 +284,19 @@ surveyzones_build_zones <- function(
   use_cache = TRUE,
   access_points = NULL
 ) {
-  args <- list(
+  plan <- .surveyzones_build_zones_impl(
     sparse_distances      = sparse_distances,
     tracts                = tracts,
     D_max                 = D_max,
     max_workload_per_zone = max_workload_per_zone,
-    K_max                 = K_max,
     enforce_partition     = enforce_partition,
-    max_variables         = max_variables,
     solver                = solver,
     max_time              = max_time,
     rel_tol               = rel_tol,
     verbose               = verbose,
-    strategy              = strategy
+    strategy              = strategy,
+    use_cache             = use_cache
   )
-
-  if (use_cache) {
-    is_cached <- do.call(memoise::has_cache(surveyzones_build_zones_mem), args)
-    if (is_cached) {
-      cli::cli_alert_success("Using cached result.")
-    } else {
-      cli::cli_alert_info("Computing and caching result.")
-    }
-    plan <- do.call(surveyzones_build_zones_mem, args)
-  } else {
-    cli::cli_alert_info("Computing without cache.")
-    plan <- do.call(.surveyzones_build_zones_impl, args)
-  }
 
   # Attach access points for downstream use (not part of cache key)
   plan$access_points <- access_points
@@ -302,8 +319,6 @@ surveyzones_build_zones_single <- function(
   tracts,
   D_max,
   max_workload_per_zone = Inf,
-  K_max,
-  max_variables = 500000L,
   solver = "glpk",
   max_time = 300,
   rel_tol = 0.01,
@@ -311,6 +326,7 @@ surveyzones_build_zones_single <- function(
   strategy = "auto"
 ) {
   n <- nrow(tracts)
+  K_max <- n
   total_workload <- sum(tracts$expected_service_time)
 
   capacitated <- is.finite(max_workload_per_zone)
@@ -341,7 +357,7 @@ surveyzones_build_zones_single <- function(
   model_type <- if (capacitated) "capacitated" else "uncapacitated"
 
   cli::cli_alert_info(
-    "n = {n}, total workload = {round(total_workload, 1)}, K0 = {K0}, K_max = {K_max}, model = {model_type}"
+    "n = {n}, total workload = {round(total_workload, 1)}, K0 = {K0}, model = {model_type}"
   )
 
   # -- Connected component decomposition --------------------------------------
@@ -391,17 +407,12 @@ surveyzones_build_zones_single <- function(
       comp_tracts <- tracts |> dplyr::filter(tract_id %in% comp_ids)
       comp_full_dist <- full_sparse_distances |>
         dplyr::filter(origin_id %in% comp_ids, destination_id %in% comp_ids)
-      comp_K_max <- min(K_max, comp_n)
-
       # Solve this component (will find 1 component and use normal K loop)
       comp_result <- surveyzones_build_zones_single(
         full_sparse_distances = comp_full_dist,
         tracts = comp_tracts,
         D_max = D_max,
         max_workload_per_zone = max_workload_per_zone,
-
-        K_max = comp_K_max,
-        max_variables = max_variables,
         solver = solver,
         max_time = max_time,
         rel_tol = rel_tol,
@@ -448,11 +459,25 @@ surveyzones_build_zones_single <- function(
         solver_status = overall_comp_status,
         objective_value = total_obj,
         n_variables = NA_integer_,
-        solve_time = elapsed
+        solve_time = elapsed,
+        optimality_gap = NA_real_
       )
     ))
   }
   # -- End component decomposition --------------------------------------------
+
+  # -- spopt backend -----------------------------------------------------------
+  if (solver == "spopt") {
+    return(.solve_partition_spopt(
+      full_sparse_distances = full_sparse_distances,
+      tracts = tracts,
+      D_max = D_max,
+      max_workload_per_zone = max_workload_per_zone,
+      strategy = effective_strategy,
+      verbose = verbose
+    ))
+  }
+  # -- End spopt backend -------------------------------------------------------
 
   # -- uncap_then_split strategy ------------------------------------------------
   if (effective_strategy == "uncap_then_split" && capacitated) {
@@ -463,7 +488,6 @@ surveyzones_build_zones_single <- function(
       K_max = K_max,
       D_max = D_max,
       max_workload_per_zone = max_workload_per_zone,
-      max_variables = max_variables,
       solver = solver,
       max_time = max_time,
       rel_tol = rel_tol,
@@ -482,7 +506,6 @@ surveyzones_build_zones_single <- function(
       K = K,
       D_max = D_max,
       max_workload_per_zone = max_workload_per_zone,
-      max_variables = max_variables,
       solver = solver,
       max_time = max_time,
       rel_tol = rel_tol,
@@ -606,12 +629,12 @@ surveyzones_solve_fixed_K <- function(
   K,
   D_max,
   max_workload_per_zone,
-  max_variables = 500000L,
   solver = "glpk",
   max_time = 300,
   rel_tol = 0.01,
   verbose = FALSE
 ) {
+  max_variables <- 500000L
   start_time <- proc.time()["elapsed"]
 
   tract_ids <- as.character(tracts$tract_id)
@@ -828,7 +851,8 @@ surveyzones_solve_fixed_K <- function(
       solver_status = status,
       objective_value = ompr::objective_value(result),
       n_variables = as.integer(n_x),
-      solve_time = solve_time
+      solve_time = solve_time,
+      optimality_gap = solved$optimality_gap
     )
   )
 }
@@ -843,7 +867,7 @@ surveyzones_solve_fixed_K <- function(
 #'
 #' @inheritParams surveyzones_build_zones
 #' @param K0 Integer. Initial number of zones (lower bound).
-#' @param K_max Integer. Safety cap on number of zones.
+#' @param K_max Integer. Upper bound on number of zones.
 #' @return A list with `assignments`, `zones`, and `diagnostics`.
 #' @keywords internal
 .uncap_then_split <- function(
@@ -853,7 +877,6 @@ surveyzones_solve_fixed_K <- function(
   K_max,
   D_max,
   max_workload_per_zone,
-  max_variables,
   solver,
   max_time,
   rel_tol,
@@ -875,7 +898,6 @@ surveyzones_solve_fixed_K <- function(
       K = K,
       D_max = D_max,
       max_workload_per_zone = Inf,
-      max_variables = max_variables,
       solver = solver,
       max_time = max_time,
       rel_tol = rel_tol,
@@ -973,7 +995,6 @@ surveyzones_solve_fixed_K <- function(
         K = K_try,
         D_max = D_max,
         max_workload_per_zone = max_workload_per_zone,
-        max_variables = max_variables,
         solver = solver,
         max_time = max_time,
         rel_tol = rel_tol,
@@ -1029,7 +1050,8 @@ surveyzones_solve_fixed_K <- function(
       solver_status = overall_status,
       objective_value = sum(final_assignments$distance_to_center, na.rm = TRUE),
       n_variables = uncap_result$diagnostics$n_variables,
-      solve_time = elapsed
+      solve_time = elapsed,
+      optimality_gap = NA_real_
     )
   )
 }
@@ -1119,14 +1141,15 @@ surveyzones_solve_fixed_K <- function(
 #' Validate and Load a Solver Plugin
 #'
 #' Checks that the requested solver is supported and that the
-#' corresponding ROI plugin package is available.
+#' corresponding ROI plugin package (or spopt) is available.
 #'
-#' @param solver Character scalar: `"glpk"`, `"highs"`, or `"cbc"`.
+#' @param solver Character scalar: `"glpk"`, `"highs"`, `"cbc"`,
+#'   `"symphony"`, or `"spopt"`.
 #' @param call Caller environment for error reporting.
 #' @return `solver`, invisibly.
 #' @keywords internal
 validate_solver <- function(solver, call = rlang::caller_env()) {
-  supported <- c("glpk", "highs", "cbc", "symphony")
+  supported <- c("glpk", "highs", "cbc", "symphony", "spopt")
   if (!is.character(solver) || length(solver) != 1L) {
     cli::cli_abort(
       "{.arg solver} must be a single character string.",
@@ -1137,10 +1160,14 @@ validate_solver <- function(solver, call = rlang::caller_env()) {
     cli::cli_abort(
       c(
         "{.arg solver} must be one of {.val {supported}}, not {.val {solver}}.",
-        "i" = "Install the matching ROI plugin: {.pkg ROI.plugin.{solver}}"
+        "i" = "For MILP solvers, install the matching ROI plugin: {.pkg ROI.plugin.{solver}}"
       ),
       call = call
     )
+  }
+  if (solver == "spopt") {
+    rlang::check_installed("spopt", reason = "to use the spopt solver backend.")
+    return(invisible(solver))
   }
   pkg <- paste0("ROI.plugin.", solver)
   if (!requireNamespace(pkg, quietly = TRUE)) {

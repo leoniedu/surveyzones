@@ -10,7 +10,7 @@ utils::globalVariables(c(
   "zone_id", "partition_id",
   "xend", "yend",
   "data",  # tidyr::nest() creates this variable
-  "surveyzones_build_zones_mem",  # memoised version created in .onLoad
+  "surveyzones_build_zones_single_mem",  # memoised version created in .onLoad
   ".data", ".tract", "result", "zone_score", "zone_order",
   "reorder"
 ))
@@ -35,8 +35,8 @@ utils::globalVariables(c(
   dir.create(cache_dir, showWarnings = FALSE, recursive = TRUE)
   .pkg$cache_dir <- cache_dir
 
-  surveyzones_build_zones_mem <<- memoise::memoise(
-    .surveyzones_build_zones_impl,
+  surveyzones_build_zones_single_mem <<- memoise::memoise(
+    surveyzones_build_zones_single,
     cache = cachem::cache_disk(dir = cache_dir)
   )
 }

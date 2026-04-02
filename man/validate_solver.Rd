@@ -7,7 +7,8 @@
 validate_solver(solver, call = rlang::caller_env())
 }
 \arguments{
-\item{solver}{Character scalar: \code{"glpk"}, \code{"highs"}, or \code{"cbc"}.}
+\item{solver}{Character scalar: \code{"glpk"}, \code{"highs"}, \code{"cbc"},
+\code{"symphony"}, or \code{"spopt"}.}
 
 \item{call}{Caller environment for error reporting.}
 }
@@ -16,6 +17,6 @@ validate_solver(solver, call = rlang::caller_env())
 }
 \description{
 Checks that the requested solver is supported and that the
-corresponding ROI plugin package is available.
+corresponding ROI plugin package (or spopt) is available.
 }
 \keyword{internal}

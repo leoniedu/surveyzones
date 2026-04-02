@@ -11,7 +11,6 @@
   K_max,
   D_max,
   max_workload_per_zone,
-  max_variables,
   solver,
   max_time,
   rel_tol,
@@ -24,7 +23,7 @@
 
 \item{K0}{Integer. Initial number of zones (lower bound).}
 
-\item{K_max}{Integer. Safety cap on number of zones.}
+\item{K_max}{Integer. Upper bound on number of zones.}
 
 \item{D_max}{Numeric scalar.  Maximum distance.  Pairs in
 \code{sparse_distances} with \code{distance > D_max} are dropped
@@ -34,13 +33,12 @@ before solving.}
 the sum of \code{expected_service_time} within any zone.  Defaults
 to \code{Inf} (uncapacitated).}
 
-\item{max_variables}{Integer.  Safety limit on the number of
-x variables in the MILP.  Aborts if exceeded.}
-
-\item{solver}{Character scalar.  Which MILP solver backend to use.
-One of \code{"glpk"} (default), \code{"highs"}, or \code{"cbc"}.  The
-corresponding ROI plugin package must be installed (e.g.,
-\code{ROI.plugin.highs}).}
+\item{solver}{Character scalar.  Which solver backend to use.
+MILP solvers: \code{"glpk"} (default), \code{"highs"}, \code{"cbc"}, \code{"symphony"}
+(requires the corresponding ROI plugin, e.g. \code{ROI.plugin.highs}).
+Use \code{"spopt"} to delegate to \code{\link[spopt:allocate_zones]{spopt::allocate_zones()}} which uses
+a Rust/HiGHS backend (much faster for large problems; requires the
+\code{spopt} package).}
 
 \item{max_time}{Numeric scalar.  Maximum seconds to spend solving each
 partition. Default \code{300}.}

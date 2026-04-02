@@ -757,8 +757,8 @@ test_that(".rename_zones produces correct ID format", {
   expect_equal(sort(out$zones$zone_id), c("P1_1.001", "P1_1.002", "P1_2.001"))
   # sequence uses new IDs
   expect_equal(sort(out$sequence$zone_id), c("P1_1.001", "P1_1.002", "P1_2.001"))
-  # group_id dropped from assignments
-  expect_false("group_id" %in% names(out$assignments))
+  # group_id preserved in assignments for downstream coloring/grouping
+  expect_true("group_id" %in% names(out$assignments))
   # center_tract_id preserved in zones
   expect_true("center_tract_id" %in% names(out$zones))
 })
@@ -800,8 +800,8 @@ test_that(".rename_zones works across two partitions", {
   pb_ids <- sort(out$zone_sequence$zone_id[out$zone_sequence$partition_id == "PB"])
   expect_equal(pa_ids, c("PA_1.001", "PA_1.002"))
   expect_equal(pb_ids, c("PB_1.001", "PB_1.002"))
-  # group_id dropped from assignments
-  expect_false("group_id" %in% names(out$assignments))
+  # group_id preserved in assignments for downstream coloring/grouping
+  expect_true("group_id" %in% names(out$assignments))
   # sequence and zones tables are also updated
   expect_equal(sort(unique(out$sequence$zone_id)),
                c("PA_1.001", "PA_1.002", "PB_1.001", "PB_1.002"))
