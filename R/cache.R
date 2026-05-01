@@ -1,6 +1,7 @@
 #' Clear the surveyzones disk cache
 #'
-#' Removes all cached results stored by [surveyzones_build_zones()].
+#' Removes all cached results stored by [surveyzones_build_zones()]
+#' and the Google Routes API engine ([surveyzones_engine_google()]).
 #' Use this when inputs have changed structurally (e.g. different distance
 #' engine or tract data) and you want to force a clean recompute.
 #'
@@ -34,6 +35,7 @@ surveyzones_clear_cache <- function(force = FALSE) {
   }
 
   memoise::forget(surveyzones_build_zones_single_mem)
+  unlink(cache_dir, recursive = TRUE)
   cli::cli_alert_success("Cache cleared ({size} freed).")
   invisible(TRUE)
 }

@@ -8,7 +8,8 @@ surveyzones_engine_google(
   measure = c("duration", "distance"),
   travel_mode = c("DRIVE", "WALK", "BICYCLE", "TRANSIT"),
   key = NULL,
-  batch_size = 25L
+  batch_size = 25L,
+  cache = TRUE
 )
 }
 \arguments{
@@ -25,6 +26,12 @@ environment variable \code{GOOGLE_MAPS_API_KEY}.}
 destinations per API request.  The Routes API allows up to 25
 origins and 25 destinations per call (625 elements); results are
 stitched together transparently.}
+
+\item{cache}{Logical scalar or string.  \code{TRUE} (default) enables
+disk caching of API responses to avoid redundant charges; results
+are saved under \code{\link[tools:userdir]{tools::R_user_dir()}} and reused on subsequent
+calls with matching coordinates.  \code{FALSE} disables caching
+entirely.  A string value is used as the cache directory path.}
 }
 \value{
 A function with signature

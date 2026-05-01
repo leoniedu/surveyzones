@@ -14,7 +14,8 @@ for confirmation before deleting.  Set \code{TRUE} to skip the prompt.}
 \code{TRUE} invisibly if the cache was cleared, \code{FALSE} if aborted.
 }
 \description{
-Removes all cached results stored by \code{\link[=surveyzones_build_zones]{surveyzones_build_zones()}}.
+Removes all cached results stored by \code{\link[=surveyzones_build_zones]{surveyzones_build_zones()}}
+and the Google Routes API engine (\code{\link[=surveyzones_engine_google]{surveyzones_engine_google()}}).
 Use this when inputs have changed structurally (e.g. different distance
 engine or tract data) and you want to force a clean recompute.
 }

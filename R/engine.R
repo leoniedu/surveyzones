@@ -85,6 +85,11 @@ surveyzones_engine_osrm <- function(measure = c("duration", "distance"),
 #'   destinations per API request.  The Routes API allows up to 25
 #'   origins and 25 destinations per call (625 elements); results are
 #'   stitched together transparently.
+#' @param cache Logical scalar or string.  `TRUE` (default) enables
+#'   disk caching of API responses to avoid redundant charges; results
+#'   are saved under [tools::R_user_dir()] and reused on subsequent
+#'   calls with matching coordinates.  `FALSE` disables caching
+#'   entirely.  A string value is used as the cache directory path.
 #'
 #' @return A function with signature
 #'   `function(origins, destinations)` that returns an n x m numeric
@@ -105,7 +110,8 @@ surveyzones_engine_google <- function(measure = c("duration", "distance"),
                                       travel_mode = c("DRIVE", "WALK",
                                                       "BICYCLE", "TRANSIT"),
                                       key = NULL,
-                                      batch_size = 25L) {
+                                      batch_size = 25L,
+                                      cache = TRUE) {
   rlang::check_installed("httr2",
                          reason = "to use the Google Routes distance engine")
   rlang::check_installed("jsonlite",
@@ -128,6 +134,16 @@ surveyzones_engine_google <- function(measure = c("duration", "distance"),
     "originIndex,destinationIndex,distanceMeters"
   }
 
+  cache_dir <- if (isTRUE(cache)) {
+    file.path(tools::R_user_dir("surveyzones", "cache"), "google")
+  } else if (is.character(cache)) {
+    cache
+  }
+
+  if (!is.null(cache_dir) && nzchar(cache_dir)) {
+    dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
+  }
+
   function(origins, destinations) {
     orig_coords <- sf::st_coordinates(origins)
     dest_coords <- sf::st_coordinates(destinations)
@@ -144,51 +160,73 @@ surveyzones_engine_google <- function(measure = c("duration", "distance"),
 
     for (oi in orig_batches) {
       for (di in dest_batches) {
-        body <- list(
-          origins = lapply(oi, function(i) {
-            list(waypoint = list(location = list(latLng = list(
-              latitude  = orig_coords[i, 2],
-              longitude = orig_coords[i, 1]
-            ))))
-          }),
-          destinations = lapply(di, function(j) {
-            list(waypoint = list(location = list(latLng = list(
-              latitude  = dest_coords[j, 2],
-              longitude = dest_coords[j, 1]
-            ))))
-          }),
-          travelMode = travel_mode
-        )
+        o_coords <- orig_coords[oi, , drop = FALSE]
+        d_coords <- dest_coords[di, , drop = FALSE]
+        cache_hit <- FALSE
 
-        resp <- httr2::request(
-          "https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix"
-        ) |>
-          httr2::req_headers(
-            `X-Goog-Api-Key`  = key,
-            `X-Goog-FieldMask` = field_mask,
-            `Content-Type`    = "application/json"
-          ) |>
-          httr2::req_body_json(body) |>
-          httr2::req_error(is_error = function(r) FALSE) |>
-          httr2::req_perform()
-
-        if (httr2::resp_status(resp) != 200L) {
-          cli::cli_abort(
-            "Routes API returned HTTP {.val {httr2::resp_status(resp)}}: {httr2::resp_body_string(resp)}"
-          )
+        # --- disk cache -------------------------------------------------
+        if (!is.null(cache_dir) && nzchar(cache_dir)) {
+          cache_key <- rlang::hash(list(
+            o = o_coords,
+            d = d_coords,
+            m = measure,
+            t = travel_mode
+          ))
+          cache_path <- file.path(cache_dir, cache_key)
+          if (file.exists(cache_path)) {
+            elements <- readRDS(cache_path)
+            cache_hit <- TRUE
+          }
         }
 
-        # Response is a JSON array of route matrix elements
-        elements <- jsonlite::fromJSON(httr2::resp_body_string(resp))
+        if (!cache_hit) {
+          body <- list(
+            origins = lapply(oi, function(i) {
+              list(waypoint = list(location = list(latLng = list(
+                latitude  = orig_coords[i, 2],
+                longitude = orig_coords[i, 1]
+              ))))
+            }),
+            destinations = lapply(di, function(j) {
+              list(waypoint = list(location = list(latLng = list(
+                latitude  = dest_coords[j, 2],
+                longitude = dest_coords[j, 1]
+              ))))
+            }),
+            travelMode = travel_mode
+          )
+
+          resp <- httr2::request(
+            "https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix"
+          ) |>
+            httr2::req_headers(
+              `X-Goog-Api-Key`  = key,
+              `X-Goog-FieldMask` = field_mask,
+              `Content-Type`    = "application/json"
+            ) |>
+            httr2::req_body_json(body) |>
+            httr2::req_error(is_error = function(r) FALSE) |>
+            httr2::req_perform()
+
+          if (httr2::resp_status(resp) != 200L) {
+            cli::cli_abort(
+              "Routes API returned HTTP {.val {httr2::resp_status(resp)}}: {httr2::resp_body_string(resp)}"
+            )
+          }
+
+          elements <- jsonlite::fromJSON(httr2::resp_body_string(resp))
+
+          if (!is.null(cache_dir) && nzchar(cache_dir)) {
+            saveRDS(elements, cache_path)
+          }
+        }
 
         for (row_idx in seq_len(nrow(elements))) {
           el <- elements[row_idx, ]
-          # API returns 0-based indices
           oi_idx <- el$originIndex + 1L
           di_idx <- el$destinationIndex + 1L
 
           if (measure == "duration") {
-            # duration is a string like "123s"
             secs <- as.numeric(sub("s$", "", el$duration))
             result_mat[oi[oi_idx], di[di_idx]] <- secs / 60
           } else {
