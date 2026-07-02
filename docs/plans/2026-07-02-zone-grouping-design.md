@@ -147,6 +147,103 @@ zones in `zzz` order (within each partition), and for each zone:
   optional haversine completion → abort, listing affected zones.
 - Unsupported `solver` → reuse `validate_solver()` unchanged.
 
+### Testing
+
+Organized by the step each test targets, so the implementation plan can
+drive them test-first per step.
+
+**Center-finding (Step 2 — medoid)**
+- 3-tract zone with hand-computed distances: assert the medoid is the tract
+  minimizing total distance to the other two.
+- Single-tract zone: center is that tract, no distance lookup needed.
+- Asymmetric input (`d(a,b) != d(b,a)`): assert the averaged-symmetrized
+  value is what's used, via a case where the naive (non-averaged) choice
+  would pick a different tract.
+- Exact tie in total distance between two candidate tracts: assert
+  deterministic selection (documented tie-break, e.g. lowest `tract_id`),
+  not solver/platform-dependent.
+- Incomplete within-zone distances (a missing pair) with
+  `complete_distances = FALSE`: assert abort naming the specific zone.
+- Two different zones both missing pairs: assert the abort message lists
+  *both* zone IDs, not just the first encountered.
+- `complete_distances = TRUE` with `access_points` supplied: a zone missing
+  a pair in `sparse_distances` still resolves a medoid, using the
+  haversine-filled value.
+
+**Zone grouping (Step 4 — reused p-median)**
+- Property test: for every zone in the output, `distance(zone, group's
+  center_zone_id) <= D_max` — generate several random small synthetic
+  layouts and assert this holds in all of them, not just one hand-built
+  case.
+- Multi-partition input: assert no group contains zones from two different
+  `partition_id` values.
+- Isolated zone (all pairwise distances to other zones exceed `D_max`):
+  assert it becomes a singleton group (`n_zones == 1`), and the run
+  succeeds rather than reporting infeasible.
+- Two well-separated clusters of zones (small intra-cluster distances,
+  large inter-cluster distances, `D_max` set between the two scales):
+  assert exactly 2 groups form, one per cluster.
+- Single-zone partition: assert it short-circuits to one trivial group
+  without error.
+- `solver = "spopt"` produces the same grouping structure as `"glpk"` on a
+  small case (skip via `testthat::skip_if_not_installed("spopt")`).
+- `use_cache = TRUE`: second call with identical arguments returns an
+  identical result (mirrors the existing cache-hit tests for
+  `surveyzones_build_zones()`).
+
+**Labeling (Step 5–6 — two independent TSPs)**
+- Every `label` matches `^\d{3}\.\d{3}$`.
+- `zzz` values within a partition form a permutation of `1..n_zones` (no
+  gaps, no duplicates).
+- `ggg` values within a partition form a permutation of `1..n_groups`.
+- Explicit non-contiguity case: construct a layout where a group's members
+  are *not* adjacent in the zone TSP order, and assert the label output
+  reflects that (e.g. group `002` contains zones with `zzz` values `003`,
+  `007`, `014`) — this is a regression guard against accidentally coupling
+  the two TSPs.
+- Multi-partition input: assert both `ggg` and `zzz` restart at `001` in
+  each partition independently.
+- Labels may repeat across partitions (no global uniqueness claim) but must
+  be unique within a partition.
+
+**Tract sequencing and orientation (Step 7)**
+- `sequence` output contains exactly the same set of `tract_id` values as
+  the input `zone_assignments`, no more, no fewer.
+- `visit_order` is a `1..n` permutation within each zone.
+- Orientation regression case: two adjacent zones (in `zzz` order) where
+  reversing the second zone's tract order strictly reduces the entry
+  distance from the first zone's exit tract — assert the reversal happens
+  (mirrors the intent of `.sequence_tracts_with_orientation()`'s existing
+  coverage).
+- Orientation does not carry across partition boundaries: the first zone of
+  partition 2 is not oriented relative to the last zone of partition 1.
+- Zones with 1–2 tracts (where `surveyzones_sequence_tracts()` short-circuits
+  and returns tracts unchanged) still participate correctly in orientation.
+
+**Validation**
+- Missing `tract_id` or `zone_id` column: informative abort naming the
+  missing column.
+- A `tract_id` assigned to two different `zone_id` values: abort.
+- A zone whose tracts span two different `partition_id` values: abort,
+  naming the zone.
+- Unsupported `solver` value: abort via `validate_solver()`, message
+  matches existing behavior.
+- `complete_distances = TRUE` with no `access_points` available (neither
+  passed nor inferable): abort with the same guidance message pattern as
+  `surveyzones_sequence()`.
+
+**End-to-end integration**
+- One synthetic dataset (~10–15 tracts, 4–5 zones, 2 partitions) exercised
+  through the full function: assert the shapes and column sets of all five
+  output components (`zones`, `groups`, `sequence`, `parameters`,
+  `diagnostics`) together, plus the cross-cutting invariants above (D_max
+  bound, label format, tract coverage) all hold simultaneously — catches
+  integration bugs that per-step unit tests could miss (e.g. a rename
+  applied to the wrong table).
+- Determinism: running the same inputs twice (same solver, same seed where
+  relevant) yields identical `zones`/`groups`/`sequence` output — not just
+  structurally-valid output that happens to differ run to run.
+
 ### What stays the same (reused, unmodified)
 
 - `surveyzones_partition()`, `surveyzones_build_zones_single()`,
