@@ -45,6 +45,14 @@ partitioned) zone assignment:
   `surveyzones_sequence_tracts()` for tract-level ordering. Zone- and
   group-level TSPs always use `"TSP"` (matching `.sequence_zones()`'s
   existing behavior — not exposed as a parameter).
+- `starting_points` — optional sf POINT object with a `partition_id`
+  column, one row per partition. When a partition has a matching row, its
+  `zzz` and `ggg` orders are anchored so the first zone and first group are
+  the ones closest to that point (see Step 5.5 below). Partitions absent
+  from `starting_points` keep the unanchored TSP orientation. Requires
+  `access_points` regardless of `complete_distances`, since anchoring needs
+  real coordinates — `sparse_distances` alone can't answer "distance from
+  an arbitrary point to a tract."
 
 No `max_workload_per_zone`-style cap is exposed: grouping is bounded by
 `D_max` only, mirroring the uncapacitated default in `surveyzones_build_zones()`.
@@ -107,6 +115,21 @@ non-contiguously, in the zone TSP order.
   membership), using the full Step 3 distance matrix → `zzz =
   sprintf("%03d", position)`.
 
+**Step 5.5 — Anchor to the partition's starting point (optional).** A TSP
+path has exactly two valid global orientations (forward and reversed). When
+`starting_points` supplies a row for this partition, both the zone order and
+the group order are independently reoriented so each starts at whichever end
+is closer to the starting point: compare the haversine distance from the
+starting point to the *first* element's representative tract versus the
+*last* element's, and reverse the whole sequence if the last is closer. This
+picks the better of the two path endpoints without re-solving the TSP with a
+fixed start node — it is not guaranteed to be the single globally-closest
+zone if that zone happens to fall in the interior of the path, but for a
+starting point outside/adjacent to the zone layout (the common case — a
+field office near but not inside the surveyed area), the nearest zone is
+typically a path endpoint anyway. Applied identically and independently to
+both the zone order (zzz) and the group order (ggg).
+
 **Step 6 — Labels.** For each zone: `label = paste0(ggg, ".", zzz)`, where
 `ggg` comes from the zone's group (Step 5's group TSP) and `zzz` from the
 zone itself (Step 5's zone TSP). Labels are unique within a partition, not
@@ -146,6 +169,9 @@ zones in `zzz` order (within each partition), and for each zone:
 - Incomplete within-zone distances for medoid-finding (Step 2), after
   optional haversine completion → abort, listing affected zones.
 - Unsupported `solver` → reuse `validate_solver()` unchanged.
+- `starting_points` supplied without `access_points` → abort (anchoring
+  needs real coordinates).
+- `starting_points` supplied without a `partition_id` column → abort.
 
 ### Testing
 
@@ -169,6 +195,16 @@ drive them test-first per step.
 - `complete_distances = TRUE` with `access_points` supplied: a zone missing
   a pair in `sparse_distances` still resolves a medoid, using the
   haversine-filled value.
+
+**Starting-point anchoring (Step 5.5)**
+- Given a starting point clearly closer to one end of a known line layout:
+  assert the zone whose representative tract is nearest the starting point
+  ends up `zzz == "001"`, and its group ends up `ggg == "001"`.
+- Given no `starting_points` row for a partition: assert that partition's
+  order is unaffected (same as the no-anchoring case).
+- Given a single zone or single group: anchoring is a no-op (nothing to
+  reverse).
+- `starting_points` provided but missing `access_points` → abort.
 
 **Zone grouping (Step 4 — reused p-median)**
 - Property test: for every zone in the output, `distance(zone, group's
@@ -249,6 +285,9 @@ drive them test-first per step.
 - `surveyzones_partition()`, `surveyzones_build_zones_single()`,
   `validate_solver()`, `.build_zone_dist_matrix()`, `.seriate_1d()`,
   `surveyzones_sequence_tracts()`, `surveyzones_complete_distances()`.
+- `sf::st_distance()` — used directly for starting-point anchoring (Step
+  5.5), same pattern `surveyzones_complete_distances()` already uses for
+  haversine fill-in. No new package dependency (`sf` is already imported).
 
 ### Out of scope
 
@@ -257,4 +296,8 @@ drive them test-first per step.
   existing `{partition}_{group}.{pos:03d}` zone ID renaming — this is a new,
   separate entry point for externally-defined zones, not a replacement.
 - No reconciliation between the group TSP and zone TSP orders — they are
-  independent by design.
+  independent by design (starting-point anchoring is applied to each
+  independently, and does not make them agree with each other).
+- No exact "true nearest zone is first" guarantee — anchoring picks the
+  better of the TSP path's two endpoints (see Step 5.5), not a full
+  re-optimization with a fixed start node.
