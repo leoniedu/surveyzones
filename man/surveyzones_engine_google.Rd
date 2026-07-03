@@ -29,7 +29,7 @@ stitched together transparently.}
 
 \item{cache}{Logical scalar or string.  \code{TRUE} (default) enables
 disk caching of API responses to avoid redundant charges; results
-are saved under \code{\link[tools:R_user_dir]{tools::R_user_dir()}} and reused on subsequent
+are saved under \code{\link[tools:userdir]{tools::R_user_dir()}} and reused on subsequent
 calls with matching coordinates.  \code{FALSE} disables caching
 entirely.  A string value is used as the cache directory path.}
 }

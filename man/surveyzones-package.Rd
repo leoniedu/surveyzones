@@ -11,10 +11,5 @@ Constructs compact, workload-balanced geographic zones for survey field teams. G
 \author{
 \strong{Maintainer}: Eduardo Leoni \email{eduardo.leoni@ibge.gov.br}
 
-Authors:
-\itemize{
-  \item Eduardo Leoni \email{eduardo.leoni@ibge.gov.br}
-}
-
 }
 \keyword{internal}
