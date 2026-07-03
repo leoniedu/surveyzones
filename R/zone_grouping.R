@@ -345,3 +345,67 @@
 
   list(zone_labels = zone_labels, group_labels = group_labels)
 }
+
+
+#' Sequence and Orient Tracts Along a Given Zone Visit Order
+#'
+#' Walks zones in the supplied order, seriates each zone's tracts, and
+#' orients each zone's tract sequence so its entry tract is closest to the
+#' previous zone's exit tract. Mirrors
+#' `.sequence_tracts_with_orientation()` in `R/sequencing.R`, but driven
+#' by an externally supplied zone order (here, the `zzz` TSP order from
+#' [.label_zone_groups()]) instead of a group+within-group order.
+#'
+#' @param zone_order Character vector of zone IDs, in visit order
+#'   (one partition).
+#' @param zone_assignments Validated zone assignments (`tract_id`,
+#'   `zone_id`).
+#' @param sparse_distances Tract-level sparse distance tibble.
+#' @param method,control Passed to [surveyzones_sequence_tracts()].
+#'
+#' @return A tibble with `zone_id`, `tract_id`, `visit_order`.
+#' @keywords internal
+.sequence_group_tracts <- function(zone_order, zone_assignments,
+                                   sparse_distances, method = "TSP",
+                                   control = NULL) {
+  dist_key <- paste(
+    sparse_distances$origin_id, sparse_distances$destination_id, sep = "|"
+  )
+  dist_val <- stats::setNames(sparse_distances$distance, dist_key)
+
+  tracts_by_zone <- split(
+    zone_assignments$tract_id, zone_assignments$zone_id
+  )
+
+  sequences <- vector("list", length(zone_order))
+  prev_exit <- NA_character_
+
+  for (j in seq_along(zone_order)) {
+    zid <- zone_order[j]
+    tract_ids <- tracts_by_zone[[zid]]
+
+    ordered_tracts <- surveyzones_sequence_tracts(
+      tract_ids, sparse_distances, method = method, control = control
+    )
+
+    if (!is.na(prev_exit) && length(ordered_tracts) > 1) {
+      first <- ordered_tracts[1]
+      last <- ordered_tracts[length(ordered_tracts)]
+      d_first <- dist_val[paste(prev_exit, first, sep = "|")]
+      d_last <- dist_val[paste(prev_exit, last, sep = "|")]
+      if (!is.na(d_first) && !is.na(d_last) && d_last < d_first) {
+        ordered_tracts <- rev(ordered_tracts)
+      }
+    }
+
+    prev_exit <- ordered_tracts[length(ordered_tracts)]
+
+    sequences[[j]] <- tibble::tibble(
+      zone_id = zid,
+      tract_id = ordered_tracts,
+      visit_order = seq_along(ordered_tracts)
+    )
+  }
+
+  dplyr::bind_rows(sequences)
+}

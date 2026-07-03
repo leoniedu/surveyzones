@@ -458,3 +458,56 @@ test_that(".label_zone_groups anchors both zzz and ggg to the partition's starti
   expect_equal(out$zone_labels$zone_id[out$zone_labels$zzz == "001"], "Z4")
   expect_equal(out$group_labels$group_id[out$group_labels$ggg == "001"], "G2")
 })
+
+test_that(".sequence_group_tracts produces a permutation of each zone's tracts", {
+  za <- tibble::tibble(
+    tract_id = paste0("T", 1:4),
+    zone_id  = c("ZA", "ZA", "ZB", "ZB")
+  )
+  positions <- c(T1 = 0, T2 = 1, T3 = 10, T4 = 11)
+  ids <- names(positions)
+  dists <- tidyr::expand_grid(origin_id = ids, destination_id = ids) |>
+    dplyr::filter(origin_id != destination_id) |>
+    dplyr::mutate(distance = abs(positions[origin_id] - positions[destination_id]))
+
+  out <- surveyzones:::.sequence_group_tracts(c("ZA", "ZB"), za, dists)
+
+  for (zid in c("ZA", "ZB")) {
+    assigned <- sort(za$tract_id[za$zone_id == zid])
+    sequenced <- sort(out$tract_id[out$zone_id == zid])
+    expect_equal(assigned, sequenced)
+  }
+})
+
+test_that(".sequence_group_tracts orients the second zone toward the first zone's exit", {
+  za <- tibble::tibble(
+    tract_id = paste0("T", 1:6),
+    zone_id  = c("ZA", "ZA", "ZA", "ZB", "ZB", "ZB")
+  )
+  positions <- c(T1 = 0, T2 = 1, T3 = 2, T4 = 10, T5 = 11, T6 = 12)
+  ids <- names(positions)
+  dists <- tidyr::expand_grid(origin_id = ids, destination_id = ids) |>
+    dplyr::filter(origin_id != destination_id) |>
+    dplyr::mutate(distance = abs(positions[origin_id] - positions[destination_id]))
+
+  out <- surveyzones:::.sequence_group_tracts(c("ZA", "ZB"), za, dists)
+
+  za_tracts <- out |> dplyr::filter(zone_id == "ZA") |> dplyr::arrange(visit_order)
+  zb_tracts <- out |> dplyr::filter(zone_id == "ZB") |> dplyr::arrange(visit_order)
+
+  exit_pos <- positions[za_tracts$tract_id[nrow(za_tracts)]]
+  entry_pos <- positions[zb_tracts$tract_id[1]]
+  tail_pos <- positions[zb_tracts$tract_id[nrow(zb_tracts)]]
+
+  expect_true(abs(entry_pos - exit_pos) <= abs(tail_pos - exit_pos))
+})
+
+test_that(".sequence_group_tracts handles single-tract zones", {
+  za <- tibble::tibble(tract_id = c("T1", "T2"), zone_id = c("Z1", "Z2"))
+  dists <- tibble::tibble(
+    origin_id = character(0), destination_id = character(0), distance = numeric(0)
+  )
+  out <- surveyzones:::.sequence_group_tracts(c("Z1", "Z2"), za, dists)
+  expect_equal(nrow(out), 2L)
+  expect_equal(out$visit_order, c(1L, 1L))
+})
