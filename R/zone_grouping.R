@@ -528,32 +528,6 @@ surveyzones_group_zones <- function(
       verbose = verbose, use_cache = use_cache
     )
 
-    # If starting_point is provided, anchor group centers to the closest zone
-    if (!is.null(starting_point_part) && !is.null(access_points)) {
-      closest_zone <- NULL
-      min_dist <- Inf
-
-      for (zid in zone_ids) {
-        zone_center_tract <- zone_centers_part[[zid]]
-        zone_pt <- access_points[access_points$tract_id == zone_center_tract, ]
-        if (nrow(zone_pt) > 0) {
-          dist <- as.numeric(sf::st_distance(starting_point_part, zone_pt[1, ]))
-          if (dist < min_dist) {
-            min_dist <- dist
-            closest_zone <- zid
-          }
-        }
-      }
-
-      # Update group to have closest_zone as center
-      if (!is.null(closest_zone) && closest_zone %in% zone_ids) {
-        zone_group <- grouped$assignments$group_id[grouped$assignments$zone_id == closest_zone]
-        if (length(zone_group) > 0) {
-          grouped$groups$center_zone_id[grouped$groups$group_id == zone_group[1]] <- closest_zone
-        }
-      }
-    }
-
     labels <- .label_zone_groups(
       zone_ids = zone_ids, groups = grouped$groups,
       zone_assignments = za_part, sparse_distances = sparse_distances,
