@@ -1731,11 +1731,14 @@ test_that("surveyzones_group_zones is deterministic across repeat calls", {
   # .seriate_1d()'s underlying heuristic can legitimately return either
   # direction on different calls -- this is not a bug (the same
   # non-determinism was independently confirmed for surveyzones_sequence_tracts()
-  # in Task 6's review). Anchoring with starting_points breaks that tie
-  # deterministically (verified empirically: 3 repeat calls with the same
-  # starting_points produced byte-identical zzz/ggg/group_id every time),
-  # so this test anchors both partitions to make the full pipeline's output
-  # deterministic, which is the property actually guaranteed by the design.
+  # in Task 6's review). But anchoring alone is NOT sufficient: the TSP
+  # heuristic also has its own RNG-dependent internal choices that can permute
+  # near-tied edges independently of overall direction (verified empirically:
+  # 5 repeat calls with an unambiguous anchor but no seed still produced 2
+  # different zzz orderings). A fixed seed around each call is required for a
+  # true byte-for-byte determinism check (verified: 5 seeded repeat calls were
+  # identical every time). Anchors are placed exactly at Z1/Z5 (lon=0), not at
+  # a line's midpoint, to avoid an anchor-level tie on top of the TSP-level one.
   za <- tibble::tibble(
     zone_id = paste0("Z", 1:6),
     tract_id = paste0("Z", 1:6),
@@ -1761,8 +1764,8 @@ test_that("surveyzones_group_zones is deterministic across repeat calls", {
     solver = "glpk", use_cache = FALSE, access_points = pts,
     complete_distances = FALSE, starting_points = starting_points
   )
-  first <- do.call(surveyzones_group_zones, args)
-  second <- do.call(surveyzones_group_zones, args)
+  withr::with_seed(42, first <- do.call(surveyzones_group_zones, args))
+  withr::with_seed(42, second <- do.call(surveyzones_group_zones, args))
 
   expect_equal(first$zones, second$zones)
   expect_equal(first$groups, second$groups)
