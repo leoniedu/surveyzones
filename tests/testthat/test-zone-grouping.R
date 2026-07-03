@@ -743,7 +743,7 @@ test_that("surveyzones_group_zones is deterministic across repeat calls", {
     dplyr::mutate(distance = abs(positions[origin_id] - positions[destination_id]))
 
   starting_points <- sf::st_as_sf(
-    data.frame(partition_id = c("A", "B"), lon = c(1.5, 10), lat = 0),
+    data.frame(partition_id = c("A", "B"), lon = c(0, 0), lat = 0),
     coords = c("lon", "lat"), crs = 4326
   )
 
@@ -752,10 +752,15 @@ test_that("surveyzones_group_zones is deterministic across repeat calls", {
     solver = "glpk", use_cache = FALSE, access_points = pts,
     complete_distances = FALSE, starting_points = starting_points
   )
-  set.seed(42)
-  first <- do.call(surveyzones_group_zones, args)
-  set.seed(42)
-  second <- do.call(surveyzones_group_zones, args)
+  # The starting_points anchor breaks the whole-sequence forward/reverse
+  # tie, but the underlying TSP heuristic (seriation::seriate(method="TSP"))
+  # also has its own RNG-dependent internal choices (e.g. random restarts)
+  # that can permute near-tied edges independently of overall direction --
+  # confirmed empirically (5 repeat calls without seeding produced 2
+  # different zzz orderings even with an unambiguous anchor). A fixed seed
+  # before each call is required for a true byte-for-byte determinism check.
+  withr::with_seed(42, first <- do.call(surveyzones_group_zones, args))
+  withr::with_seed(42, second <- do.call(surveyzones_group_zones, args))
 
   expect_equal(first$zones, second$zones)
   expect_equal(first$groups, second$groups)
