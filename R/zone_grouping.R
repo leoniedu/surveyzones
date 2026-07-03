@@ -170,3 +170,81 @@
   ) |>
     dplyr::filter(is.finite(.data$distance))
 }
+
+
+#' Group Zones Within D_max Using the Reused Tract-Level p-Median Solver
+#'
+#' Treats zones as the atomic units of a second p-median solve: zone
+#' centers become candidate "centers", and the same MILP machinery used
+#' for tract-to-zone assignment now bounds every zone to within `D_max`
+#' of its group's center zone.
+#'
+#' @param zone_ids Character vector of zone IDs in a single partition.
+#' @param zone_assignments Validated zone assignments (`tract_id`,
+#'   `zone_id`, `partition_id`) — used to compute the zone-to-zone
+#'   distance matrix via minimum pairwise tract distance.
+#' @param sparse_distances Tract-level sparse distance tibble.
+#' @param D_max Numeric scalar. Grouping distance bound.
+#' @param solver,max_time,rel_tol,verbose,use_cache Passed through to the
+#'   reused solver, same meaning as in [surveyzones_build_zones()].
+#'
+#' @return A list with `assignments` (`zone_id`, `group_id`), `groups`
+#'   (`group_id`, `center_zone_id`, `n_zones`, `diameter`), and
+#'   `diagnostics`.
+#' @keywords internal
+.group_zones_pmedian <- function(zone_ids, zone_assignments, sparse_distances,
+                                 D_max, solver, max_time, rel_tol, verbose,
+                                 use_cache) {
+  if (length(zone_ids) == 1L) {
+    return(list(
+      assignments = tibble::tibble(zone_id = zone_ids, group_id = zone_ids),
+      groups = tibble::tibble(
+        group_id = zone_ids, center_zone_id = zone_ids,
+        n_zones = 1L, diameter = 0
+      ),
+      diagnostics = list(
+        solver_status = "optimal", objective_value = 0,
+        n_variables = 0L, solve_time = 0, optimality_gap = 0
+      )
+    ))
+  }
+
+  zone_sparse <- .zone_dist_sparse(zone_ids, zone_assignments, sparse_distances)
+
+  synthetic_tracts <- tibble::tibble(
+    tract_id = zone_ids,
+    expected_service_time = 1
+  )
+
+  solve_single <- if (use_cache) {
+    surveyzones_build_zones_single_mem
+  } else {
+    surveyzones_build_zones_single
+  }
+
+  result <- solve_single(
+    full_sparse_distances = zone_sparse,
+    tracts = synthetic_tracts,
+    D_max = D_max,
+    max_workload_per_zone = Inf,
+    solver = solver,
+    max_time = max_time,
+    rel_tol = rel_tol,
+    verbose = verbose,
+    strategy = "auto"
+  )
+
+  list(
+    assignments = tibble::tibble(
+      zone_id = result$assignments$tract_id,
+      group_id = result$assignments$zone_id
+    ),
+    groups = tibble::tibble(
+      group_id = result$zones$zone_id,
+      center_zone_id = result$zones$center_tract_id,
+      n_zones = result$zones$n_tracts,
+      diameter = result$zones$diameter
+    ),
+    diagnostics = result$diagnostics
+  )
+}

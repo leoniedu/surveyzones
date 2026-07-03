@@ -164,3 +164,148 @@ test_that(".zone_dist_sparse drops unreachable (Inf) zone pairs", {
   out <- surveyzones:::.zone_dist_sparse(c("Z1", "Z2", "Z3"), assignments, dists)
   expect_false(any(out$origin_id == "Z3" | out$destination_id == "Z3"))
 })
+
+test_that(".group_zones_pmedian binds close zones into one group", {
+  skip_if_not_installed("ROI.plugin.glpk")
+  za <- surveyzones:::.validate_zone_assignments(data.frame(
+    tract_id = paste0("T", 1:4),
+    zone_id  = paste0("Z", 1:4)
+  ))
+  positions <- c(T1 = 0, T2 = 1, T3 = 2, T4 = 3)
+  ids <- names(positions)
+  dists <- tidyr::expand_grid(origin_id = ids, destination_id = ids) |>
+    dplyr::filter(origin_id != destination_id) |>
+    dplyr::mutate(distance = abs(positions[origin_id] - positions[destination_id]))
+
+  out <- surveyzones:::.group_zones_pmedian(
+    zone_ids = paste0("Z", 1:4), zone_assignments = za, sparse_distances = dists,
+    D_max = 10, solver = "glpk", max_time = 30, rel_tol = 0.01,
+    verbose = FALSE, use_cache = FALSE
+  )
+
+  expect_equal(nrow(out$groups), 1L)
+  expect_equal(out$groups$n_zones, 4L)
+})
+
+test_that(".group_zones_pmedian keeps every zone within D_max of its group center", {
+  skip_if_not_installed("ROI.plugin.glpk")
+  set.seed(1)
+  n <- 8
+  positions <- stats::runif(n, 0, 50)
+  ids <- paste0("Z", seq_len(n))
+  names(positions) <- ids
+  za <- surveyzones:::.validate_zone_assignments(data.frame(
+    tract_id = ids, zone_id = ids
+  ))
+  dists <- tidyr::expand_grid(origin_id = ids, destination_id = ids) |>
+    dplyr::filter(origin_id != destination_id) |>
+    dplyr::mutate(distance = abs(positions[origin_id] - positions[destination_id]))
+
+  out <- surveyzones:::.group_zones_pmedian(
+    zone_ids = ids, zone_assignments = za, sparse_distances = dists,
+    D_max = 10, solver = "glpk", max_time = 30, rel_tol = 0.01,
+    verbose = FALSE, use_cache = FALSE
+  )
+
+  dist_lookup <- dists |>
+    dplyr::mutate(key = paste(origin_id, destination_id)) |>
+    dplyr::select(key, distance) |>
+    tibble::deframe()
+
+  checked <- out$assignments |>
+    dplyr::left_join(out$groups, by = "group_id") |>
+    dplyr::filter(.data$zone_id != .data$center_zone_id) |>
+    dplyr::mutate(d = dist_lookup[paste(.data$zone_id, .data$center_zone_id)])
+
+  expect_true(all(checked$d <= 10))
+})
+
+test_that(".group_zones_pmedian isolates an out-of-range zone as a singleton", {
+  skip_if_not_installed("ROI.plugin.glpk")
+  ids <- c("Z1", "Z2", "Z3", "Z4")
+  positions <- c(Z1 = 0, Z2 = 1, Z3 = 2, Z4 = 1000)
+  za <- surveyzones:::.validate_zone_assignments(data.frame(
+    tract_id = ids, zone_id = ids
+  ))
+  dists <- tidyr::expand_grid(origin_id = ids, destination_id = ids) |>
+    dplyr::filter(origin_id != destination_id) |>
+    dplyr::mutate(distance = abs(positions[origin_id] - positions[destination_id]))
+
+  out <- surveyzones:::.group_zones_pmedian(
+    zone_ids = ids, zone_assignments = za, sparse_distances = dists,
+    D_max = 10, solver = "glpk", max_time = 30, rel_tol = 0.01,
+    verbose = FALSE, use_cache = FALSE
+  )
+
+  z4_group <- out$assignments$group_id[out$assignments$zone_id == "Z4"]
+  n_zones_in_z4_group <- out$groups$n_zones[out$groups$group_id == z4_group]
+  expect_equal(n_zones_in_z4_group, 1L)
+})
+
+test_that(".group_zones_pmedian handles a single-zone partition trivially", {
+  za <- surveyzones:::.validate_zone_assignments(data.frame(
+    tract_id = "T1", zone_id = "Z1"
+  ))
+  out <- surveyzones:::.group_zones_pmedian(
+    zone_ids = "Z1", zone_assignments = za,
+    sparse_distances = tibble::tibble(
+      origin_id = character(0), destination_id = character(0), distance = numeric(0)
+    ),
+    D_max = 10, solver = "glpk", max_time = 30, rel_tol = 0.01,
+    verbose = FALSE, use_cache = FALSE
+  )
+  expect_equal(nrow(out$groups), 1L)
+  expect_equal(out$groups$group_id, "Z1")
+})
+
+test_that(".group_zones_pmedian with solver='spopt' matches glpk's grouping structure", {
+  skip_if_not_installed("ROI.plugin.glpk")
+  skip_if_not_installed("spopt")
+  za <- surveyzones:::.validate_zone_assignments(data.frame(
+    tract_id = paste0("T", 1:4),
+    zone_id  = paste0("Z", 1:4)
+  ))
+  positions <- c(T1 = 0, T2 = 1, T3 = 2, T4 = 3)
+  ids <- names(positions)
+  dists <- tidyr::expand_grid(origin_id = ids, destination_id = ids) |>
+    dplyr::filter(origin_id != destination_id) |>
+    dplyr::mutate(distance = abs(positions[origin_id] - positions[destination_id]))
+
+  out_glpk <- surveyzones:::.group_zones_pmedian(
+    zone_ids = paste0("Z", 1:4), zone_assignments = za, sparse_distances = dists,
+    D_max = 10, solver = "glpk", max_time = 30, rel_tol = 0.01,
+    verbose = FALSE, use_cache = FALSE
+  )
+  out_spopt <- surveyzones:::.group_zones_pmedian(
+    zone_ids = paste0("Z", 1:4), zone_assignments = za, sparse_distances = dists,
+    D_max = 10, solver = "spopt", max_time = 30, rel_tol = 0.01,
+    verbose = FALSE, use_cache = FALSE
+  )
+
+  expect_equal(nrow(out_glpk$groups), nrow(out_spopt$groups))
+  expect_equal(out_glpk$groups$n_zones, out_spopt$groups$n_zones)
+})
+
+test_that(".group_zones_pmedian use_cache=TRUE returns identical results on repeat calls", {
+  skip_if_not_installed("ROI.plugin.glpk")
+  za <- surveyzones:::.validate_zone_assignments(data.frame(
+    tract_id = paste0("T", 1:4),
+    zone_id  = paste0("Z", 1:4)
+  ))
+  positions <- c(T1 = 0, T2 = 1, T3 = 2, T4 = 3)
+  ids <- names(positions)
+  dists <- tidyr::expand_grid(origin_id = ids, destination_id = ids) |>
+    dplyr::filter(origin_id != destination_id) |>
+    dplyr::mutate(distance = abs(positions[origin_id] - positions[destination_id]))
+
+  args <- list(
+    zone_ids = paste0("Z", 1:4), zone_assignments = za, sparse_distances = dists,
+    D_max = 10, solver = "glpk", max_time = 30, rel_tol = 0.01,
+    verbose = FALSE, use_cache = TRUE
+  )
+  first <- do.call(surveyzones:::.group_zones_pmedian, args)
+  second <- do.call(surveyzones:::.group_zones_pmedian, args)
+
+  expect_equal(first$groups, second$groups)
+  expect_equal(first$assignments, second$assignments)
+})
