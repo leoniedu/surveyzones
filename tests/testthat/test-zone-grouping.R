@@ -309,3 +309,152 @@ test_that(".group_zones_pmedian use_cache=TRUE returns identical results on repe
   expect_equal(first$groups, second$groups)
   expect_equal(first$assignments, second$assignments)
 })
+
+test_that(".label_zone_groups produces 3-digit zzz and ggg permutations", {
+  ids <- paste0("Z", 1:4)
+  assignments <- tibble::tibble(
+    tract_id = paste0("T", 1:4), zone_id = ids, partition_id = "P1"
+  )
+  positions <- c(T1 = 0, T2 = 1, T3 = 2, T4 = 3)
+  dists <- tidyr::expand_grid(origin_id = names(positions), destination_id = names(positions)) |>
+    dplyr::filter(origin_id != destination_id) |>
+    dplyr::mutate(distance = abs(positions[origin_id] - positions[destination_id]))
+
+  groups <- tibble::tibble(
+    group_id = c("G1", "G2"),
+    center_zone_id = c("Z1", "Z4"),
+    n_zones = c(2L, 2L), diameter = c(1, 1)
+  )
+
+  out <- surveyzones:::.label_zone_groups(ids, groups, assignments, dists)
+
+  expect_equal(sort(out$zone_labels$zzz), sprintf("%03d", 1:4))
+  expect_equal(sort(out$group_labels$ggg), sprintf("%03d", 1:2))
+})
+
+test_that(".label_zone_groups keeps zzz independent of group membership", {
+  # 4 zones on a line: Z1(0) Z2(1) Z3(2) Z4(3)
+  # Groups: G1 = {Z1, Z3}, G2 = {Z2, Z4} -- interleaved on the line
+  ids <- paste0("Z", 1:4)
+  assignments <- tibble::tibble(tract_id = ids, zone_id = ids, partition_id = "P1")
+  positions <- c(Z1 = 0, Z2 = 1, Z3 = 2, Z4 = 3)
+  dists <- tidyr::expand_grid(origin_id = ids, destination_id = ids) |>
+    dplyr::filter(origin_id != destination_id) |>
+    dplyr::mutate(distance = abs(positions[origin_id] - positions[destination_id]))
+
+  groups <- tibble::tibble(
+    group_id = c("G1", "G2"), center_zone_id = c("Z1", "Z2"),
+    n_zones = c(2L, 2L), diameter = c(2, 2)
+  )
+
+  out <- surveyzones:::.label_zone_groups(ids, groups, assignments, dists)
+
+  zzz_num <- stats::setNames(as.integer(out$zone_labels$zzz), out$zone_labels$zone_id)
+
+  # The zone TSP recovers the spatial line order (Z1..Z4 or its reverse)
+  ordered_by_zzz <- names(sort(zzz_num))
+  in_position_order <- all(ordered_by_zzz == paste0("Z", 1:4)) ||
+    all(ordered_by_zzz == paste0("Z", 4:1))
+  expect_true(in_position_order)
+
+  # G1 = {Z1, Z3}: their zzz positions are 2 apart, not adjacent -- proving
+  # the zone TSP was not constrained by group membership
+  expect_equal(abs(zzz_num[["Z1"]] - zzz_num[["Z3"]]), 2L)
+})
+
+test_that(".label_zone_groups handles a single zone and single group", {
+  ids <- "Z1"
+  assignments <- tibble::tibble(tract_id = "T1", zone_id = "Z1", partition_id = "P1")
+  dists <- tibble::tibble(
+    origin_id = character(0), destination_id = character(0), distance = numeric(0)
+  )
+  groups <- tibble::tibble(
+    group_id = "Z1", center_zone_id = "Z1", n_zones = 1L, diameter = 0
+  )
+
+  out <- surveyzones:::.label_zone_groups(ids, groups, assignments, dists)
+  expect_equal(out$zone_labels$zzz, "001")
+  expect_equal(out$group_labels$ggg, "001")
+})
+
+test_that(".anchor_partition_order reverses order when the last element is closer to start", {
+  ids <- c("Z1", "Z2", "Z3")
+  zone_centers <- c(Z1 = "T1", Z2 = "T2", Z3 = "T3")
+  access_points <- sf::st_as_sf(
+    data.frame(
+      tract_id = c("T1", "T2", "T3"),
+      lon = c(0, 1, 2), lat = c(0, 0, 0)
+    ),
+    coords = c("lon", "lat"), crs = 4326
+  )
+  starting_point <- sf::st_as_sf(
+    data.frame(lon = 3, lat = 0), coords = c("lon", "lat"), crs = 4326
+  )
+
+  out <- surveyzones:::.anchor_partition_order(ids, zone_centers, starting_point, access_points)
+  expect_equal(out, c("Z3", "Z2", "Z1"))
+})
+
+test_that(".anchor_partition_order keeps order when the first element is already closer", {
+  ids <- c("Z1", "Z2", "Z3")
+  zone_centers <- c(Z1 = "T1", Z2 = "T2", Z3 = "T3")
+  access_points <- sf::st_as_sf(
+    data.frame(
+      tract_id = c("T1", "T2", "T3"),
+      lon = c(0, 1, 2), lat = c(0, 0, 0)
+    ),
+    coords = c("lon", "lat"), crs = 4326
+  )
+  starting_point <- sf::st_as_sf(
+    data.frame(lon = -1, lat = 0), coords = c("lon", "lat"), crs = 4326
+  )
+
+  out <- surveyzones:::.anchor_partition_order(ids, zone_centers, starting_point, access_points)
+  expect_equal(out, c("Z1", "Z2", "Z3"))
+})
+
+test_that(".anchor_partition_order is a no-op for a single element or NULL starting_point", {
+  expect_equal(
+    surveyzones:::.anchor_partition_order("Z1", c(Z1 = "T1"), NULL, NULL),
+    "Z1"
+  )
+  expect_equal(
+    surveyzones:::.anchor_partition_order(c("Z1", "Z2"), c(Z1 = "T1", Z2 = "T2"), NULL, NULL),
+    c("Z1", "Z2")
+  )
+})
+
+test_that(".label_zone_groups anchors both zzz and ggg to the partition's starting point", {
+  # 4 zones on a line: Z1(0) Z2(1) Z3(2) Z4(3); groups G1={Z1,Z2}, G2={Z3,Z4}.
+  # Starting point is right at Z4 -> zzz should start at Z4 and ggg should
+  # start with G2 (whose center is Z4).
+  ids <- paste0("Z", 1:4)
+  assignments <- tibble::tibble(tract_id = ids, zone_id = ids, partition_id = "P1")
+  positions <- c(Z1 = 0, Z2 = 1, Z3 = 2, Z4 = 3)
+  dists <- tidyr::expand_grid(origin_id = ids, destination_id = ids) |>
+    dplyr::filter(origin_id != destination_id) |>
+    dplyr::mutate(distance = abs(positions[origin_id] - positions[destination_id]))
+
+  groups <- tibble::tibble(
+    group_id = c("G1", "G2"), center_zone_id = c("Z1", "Z4"),
+    n_zones = c(2L, 2L), diameter = c(1, 1)
+  )
+
+  zone_centers <- c(Z1 = "Z1", Z2 = "Z2", Z3 = "Z3", Z4 = "Z4")
+  access_points <- sf::st_as_sf(
+    data.frame(tract_id = ids, lon = unname(positions), lat = 0),
+    coords = c("lon", "lat"), crs = 4326
+  )
+  starting_point <- sf::st_as_sf(
+    data.frame(lon = 3, lat = 0), coords = c("lon", "lat"), crs = 4326
+  )
+
+  out <- surveyzones:::.label_zone_groups(
+    ids, groups, assignments, dists,
+    zone_centers = zone_centers, starting_point = starting_point,
+    access_points = access_points
+  )
+
+  expect_equal(out$zone_labels$zone_id[out$zone_labels$zzz == "001"], "Z4")
+  expect_equal(out$group_labels$group_id[out$group_labels$ggg == "001"], "G2")
+})

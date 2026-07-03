@@ -248,3 +248,100 @@
     diagnostics = result$diagnostics
   )
 }
+
+
+#' Reorient a Zone/Group Visit Order Toward a Partition's Starting Point
+#'
+#' Compares the endpoint tracts of an ordered ID sequence (each ID mapped
+#' to its representative tract) to a partition's starting-point
+#' coordinate, and reverses the sequence when its *last* element is
+#' closer to the starting point than its *first* element -- so the
+#' sequence starts at the (endpoint-optimal) closer end. TSP paths have
+#' exactly two valid global orientations; this picks the better one
+#' without re-solving the TSP with a fixed start node.
+#'
+#' @param order_ids Character vector, already TSP-ordered (zone IDs or
+#'   group center-zone IDs).
+#' @param zone_centers Named character vector: representative `tract_id`
+#'   for each ID in `order_ids` (names = the IDs).
+#' @param starting_point A one-row sf POINT object (the partition's
+#'   starting point), or `NULL` to skip anchoring.
+#' @param access_points An sf object with POINT geometries and a
+#'   `tract_id` column, covering every tract in `zone_centers`.
+#'
+#' @return `order_ids`, possibly reversed.
+#' @keywords internal
+.anchor_partition_order <- function(order_ids, zone_centers, starting_point,
+                                    access_points) {
+  if (length(order_ids) <= 1L || is.null(starting_point)) return(order_ids)
+
+  first_tract <- zone_centers[[order_ids[1]]]
+  last_tract <- zone_centers[[order_ids[length(order_ids)]]]
+
+  first_pt <- access_points[access_points$tract_id == first_tract, ]
+  last_pt <- access_points[access_points$tract_id == last_tract, ]
+
+  d_first <- as.numeric(sf::st_distance(starting_point, first_pt))
+  d_last <- as.numeric(sf::st_distance(starting_point, last_pt))
+
+  if (d_last < d_first) rev(order_ids) else order_ids
+}
+
+
+#' Assign ggg.zzz Labels via Two Independent Partition-Wide TSPs
+#'
+#' Seriates group centers (for `ggg`) and all zones (for `zzz`)
+#' independently within one partition -- the two orders do not need to
+#' agree, so a group's members may be non-contiguous in the `zzz`
+#' sequence. When a starting point is supplied, both orders are anchored
+#' via [.anchor_partition_order()] so the first zone and first group are
+#' each the one closest to it.
+#'
+#' @param zone_ids Character vector of all zone IDs in one partition.
+#' @param groups Tibble for this partition with `group_id`,
+#'   `center_zone_id` (as returned by [.group_zones_pmedian()]).
+#' @param zone_assignments Validated zone assignments.
+#' @param sparse_distances Tract-level sparse distance tibble.
+#' @param zone_centers Named character vector (`zone_id` -> representative
+#'   `tract_id`, scoped to this partition). Only used when
+#'   `starting_point` is supplied.
+#' @param starting_point A one-row sf POINT object (this partition's
+#'   starting point), or `NULL` (default) to skip anchoring.
+#' @param access_points An sf object with POINT geometries and a
+#'   `tract_id` column. Required when `starting_point` is supplied.
+#'
+#' @return A list with `zone_labels` (`zone_id`, `zzz`) and
+#'   `group_labels` (`group_id`, `ggg`).
+#' @keywords internal
+.label_zone_groups <- function(zone_ids, groups, zone_assignments,
+                               sparse_distances, zone_centers = NULL,
+                               starting_point = NULL, access_points = NULL) {
+  zone_dists <- .zone_dist_sparse(zone_ids, zone_assignments, sparse_distances)
+
+  zone_order <- .seriate_1d(zone_ids, zone_dists)
+  group_order <- .seriate_1d(groups$center_zone_id, zone_dists)
+
+  zone_order <- .anchor_partition_order(
+    zone_order, zone_centers, starting_point, access_points
+  )
+  group_order <- .anchor_partition_order(
+    group_order, zone_centers, starting_point, access_points
+  )
+
+  zone_labels <- tibble::tibble(
+    zone_id = zone_order,
+    zzz = sprintf("%03d", seq_along(zone_order))
+  )
+
+  group_labels <- tibble::tibble(
+    center_zone_id = group_order,
+    ggg = sprintf("%03d", seq_along(group_order))
+  ) |>
+    dplyr::left_join(
+      groups |> dplyr::select("group_id", "center_zone_id"),
+      by = "center_zone_id"
+    ) |>
+    dplyr::select("group_id", "ggg")
+
+  list(zone_labels = zone_labels, group_labels = group_labels)
+}
