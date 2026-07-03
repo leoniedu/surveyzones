@@ -511,3 +511,21 @@ test_that(".sequence_group_tracts handles single-tract zones", {
   expect_equal(nrow(out), 2L)
   expect_equal(out$visit_order, c(1L, 1L))
 })
+
+test_that("new_surveyzones_zone_groups and print work", {
+  obj <- surveyzones:::new_surveyzones_zone_groups(
+    zones = tibble::tibble(
+      zone_id = "Z1", partition_id = "P1", center_tract_id = "T1",
+      n_tracts = 1L, group_id = "Z1", ggg = "001", zzz = "001", label = "001.001"
+    ),
+    groups = tibble::tibble(
+      group_id = "Z1", partition_id = "P1", center_zone_id = "Z1",
+      n_zones = 1L, diameter = 0, ggg = "001"
+    ),
+    sequence = tibble::tibble(zone_id = "Z1", tract_id = "T1", visit_order = 1L),
+    parameters = list(D_max = 10, solver = "glpk", timestamp = Sys.time()),
+    diagnostics = list(solver_status = "optimal")
+  )
+  expect_s3_class(obj, "surveyzones_zone_groups")
+  expect_no_error(print(obj))
+})
