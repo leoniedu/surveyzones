@@ -409,3 +409,201 @@
 
   dplyr::bind_rows(sequences)
 }
+
+
+#' Group Externally-Defined Zones Within a Distance Bound and Label Them
+#'
+#' Given zones that already exist (not built by [surveyzones_build_zones()]),
+#' finds a center for each zone, groups zones within `D_max` of a group
+#' center by reusing the same p-median machinery one level up, and assigns
+#' each zone a stable `ggg.zzz` label from two independent partition-wide
+#' TSPs. Also produces a tract-level visit sequence oriented across zone
+#' boundaries.
+#'
+#' @param zone_assignments A data.frame with `tract_id`, `zone_id`, and
+#'   optionally `partition_id`. Every tract in a given `zone_id` must
+#'   share the same `partition_id`.
+#' @param sparse_distances Tract-level sparse distance tibble (`origin_id`,
+#'   `destination_id`, `distance`).
+#' @param D_max Numeric scalar. Every zone in a group is within `D_max` of
+#'   that group's center zone.
+#' @param solver Character scalar. One of `"glpk"` (default), `"highs"`,
+#'   `"cbc"`, `"symphony"`, `"spopt"` -- reused for the zone-level p-median.
+#' @param max_time,rel_tol,verbose,use_cache Passed through to the reused
+#'   solver, same meaning as in [surveyzones_build_zones()].
+#' @param access_points An sf object with POINT geometries and a
+#'   `tract_id` column. Used to fill missing pairwise distances via
+#'   haversine. Required when `complete_distances = TRUE`.
+#' @param speed_kmh Numeric scalar. Assumed travel speed for haversine
+#'   fill-in (km/h). Default `0.1`.
+#' @param complete_distances Logical scalar. When `TRUE` (default),
+#'   missing pairwise distances are filled using haversine via
+#'   [surveyzones_complete_distances()].
+#' @param starting_points An optional sf POINT object with a
+#'   `partition_id` column, one row per partition. When a partition has a
+#'   matching row, that partition's `zzz` and `ggg` orders are anchored so
+#'   the first zone and first group are the ones closest to it (see
+#'   [.anchor_partition_order()]). Partitions absent from `starting_points`
+#'   keep the unanchored TSP orientation. Requires `access_points`
+#'   regardless of `complete_distances`.
+#' @param method,control Seriation method/control passed to
+#'   [surveyzones_sequence_tracts()] for tract-level ordering. Zone- and
+#'   group-level TSPs always use `"TSP"`.
+#'
+#' @return A `surveyzones_zone_groups` object.
+#'
+#' @export
+surveyzones_group_zones <- function(
+  zone_assignments,
+  sparse_distances,
+  D_max,
+  solver = "glpk",
+  max_time = 300,
+  rel_tol = 0.01,
+  verbose = FALSE,
+  use_cache = TRUE,
+  access_points = NULL,
+  speed_kmh = 0.1,
+  complete_distances = TRUE,
+  starting_points = NULL,
+  method = "TSP",
+  control = NULL
+) {
+  D_max <- as.numeric(D_max)
+  validate_solver(solver)
+
+  za <- .validate_zone_assignments(zone_assignments)
+
+  if (!is.null(starting_points) && is.null(access_points)) {
+    cli::cli_abort(c(
+      "{.arg access_points} is required when {.arg starting_points} is supplied.",
+      "i" = "Starting-point anchoring needs real coordinates to compute distances."
+    ))
+  }
+  if (!is.null(starting_points) && !"partition_id" %in% names(starting_points)) {
+    cli::cli_abort("{.arg starting_points} must contain a {.field partition_id} column.")
+  }
+
+  if (complete_distances) {
+    if (is.null(access_points)) {
+      cli::cli_abort(c(
+        "{.arg access_points} is required when {.arg complete_distances} is {.val TRUE}.",
+        "i" = "Either pass it explicitly or set {.code complete_distances = FALSE}."
+      ))
+    }
+    sparse_distances <- surveyzones_complete_distances(
+      sparse_distances, access_points, speed_kmh = speed_kmh
+    )
+  }
+
+  centers <- .find_zone_centers(za, sparse_distances)
+
+  partitions <- split(centers$zone_id, centers$partition_id)
+
+  zones_out <- vector("list", length(partitions))
+  groups_out <- vector("list", length(partitions))
+  sequence_out <- vector("list", length(partitions))
+  diagnostics_out <- vector("list", length(partitions))
+
+  for (idx in seq_along(partitions)) {
+    pid <- names(partitions)[idx]
+    zone_ids <- partitions[[idx]]
+    za_part <- za |> dplyr::filter(.data$partition_id == pid)
+    centers_part <- centers |> dplyr::filter(.data$partition_id == pid)
+    zone_centers_part <- stats::setNames(
+      centers_part$center_tract_id, centers_part$zone_id
+    )
+
+    starting_point_part <- if (is.null(starting_points)) {
+      NULL
+    } else {
+      sp <- starting_points[starting_points$partition_id == pid, ]
+      if (nrow(sp) == 0) NULL else sp[1, ]
+    }
+
+    grouped <- .group_zones_pmedian(
+      zone_ids = zone_ids, zone_assignments = za_part,
+      sparse_distances = sparse_distances, D_max = D_max,
+      solver = solver, max_time = max_time, rel_tol = rel_tol,
+      verbose = verbose, use_cache = use_cache
+    )
+
+    # If starting_point is provided, anchor group centers to the closest zone
+    if (!is.null(starting_point_part) && !is.null(access_points)) {
+      closest_zone <- NULL
+      min_dist <- Inf
+
+      for (zid in zone_ids) {
+        zone_center_tract <- zone_centers_part[[zid]]
+        zone_pt <- access_points[access_points$tract_id == zone_center_tract, ]
+        if (nrow(zone_pt) > 0) {
+          dist <- as.numeric(sf::st_distance(starting_point_part, zone_pt[1, ]))
+          if (dist < min_dist) {
+            min_dist <- dist
+            closest_zone <- zid
+          }
+        }
+      }
+
+      # Update group to have closest_zone as center
+      if (!is.null(closest_zone) && closest_zone %in% zone_ids) {
+        zone_group <- grouped$assignments$group_id[grouped$assignments$zone_id == closest_zone]
+        if (length(zone_group) > 0) {
+          grouped$groups$center_zone_id[grouped$groups$group_id == zone_group[1]] <- closest_zone
+        }
+      }
+    }
+
+    labels <- .label_zone_groups(
+      zone_ids = zone_ids, groups = grouped$groups,
+      zone_assignments = za_part, sparse_distances = sparse_distances,
+      zone_centers = zone_centers_part, starting_point = starting_point_part,
+      access_points = access_points
+    )
+
+    zone_order <- labels$zone_labels |>
+      dplyr::arrange(as.integer(.data$zzz)) |>
+      dplyr::pull(.data$zone_id)
+
+    sequence_out[[idx]] <- .sequence_group_tracts(
+      zone_order, za_part, sparse_distances, method = method, control = control
+    )
+
+    part_zones <- centers |>
+      dplyr::filter(.data$partition_id == pid) |>
+      dplyr::left_join(grouped$assignments, by = "zone_id") |>
+      dplyr::left_join(labels$zone_labels, by = "zone_id") |>
+      dplyr::left_join(labels$group_labels, by = "group_id") |>
+      dplyr::mutate(label = paste0(.data$ggg, ".", .data$zzz))
+
+    zones_out[[idx]] <- part_zones |>
+      dplyr::select(
+        "zone_id", "partition_id", "center_tract_id", "n_tracts",
+        "group_id", "ggg", "zzz", "label"
+      )
+
+    groups_out[[idx]] <- grouped$groups |>
+      dplyr::left_join(labels$group_labels, by = "group_id") |>
+      dplyr::mutate(partition_id = pid) |>
+      dplyr::select(
+        "group_id", "partition_id", "center_zone_id", "n_zones",
+        "diameter", "ggg"
+      )
+
+    diagnostics_out[[idx]] <- grouped$diagnostics
+  }
+
+  new_surveyzones_zone_groups(
+    zones = dplyr::bind_rows(zones_out),
+    groups = dplyr::bind_rows(groups_out),
+    sequence = dplyr::bind_rows(sequence_out),
+    parameters = list(D_max = D_max, solver = solver, timestamp = Sys.time()),
+    diagnostics = list(
+      solver_status = purrr::map_chr(diagnostics_out, "solver_status"),
+      objective_value = purrr::map_dbl(diagnostics_out, "objective_value"),
+      n_variables = purrr::map_int(diagnostics_out, "n_variables"),
+      solve_time = purrr::map_dbl(diagnostics_out, "solve_time"),
+      optimality_gap = purrr::map_dbl(diagnostics_out, "optimality_gap")
+    )
+  )
+}

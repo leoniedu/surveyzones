@@ -529,3 +529,111 @@ test_that("new_surveyzones_zone_groups and print work", {
   expect_s3_class(obj, "surveyzones_zone_groups")
   expect_no_error(print(obj))
 })
+
+test_that("surveyzones_group_zones returns a surveyzones_zone_groups object", {
+  skip_if_not_installed("ROI.plugin.glpk")
+  za <- data.frame(
+    tract_id = paste0("T", 1:4),
+    zone_id  = c("Z1", "Z1", "Z2", "Z2")
+  )
+  positions <- c(T1 = 0, T2 = 1, T3 = 2, T4 = 3)
+  ids <- names(positions)
+  dists <- tidyr::expand_grid(origin_id = ids, destination_id = ids) |>
+    dplyr::filter(origin_id != destination_id) |>
+    dplyr::mutate(distance = abs(positions[origin_id] - positions[destination_id]))
+
+  result <- surveyzones_group_zones(
+    zone_assignments = za,
+    sparse_distances = dists,
+    D_max = 10,
+    solver = "glpk",
+    use_cache = FALSE,
+    complete_distances = FALSE
+  )
+
+  expect_s3_class(result, "surveyzones_zone_groups")
+  expect_equal(nrow(result$zones), 2L)
+  expect_equal(sort(result$sequence$tract_id), sort(za$tract_id))
+})
+
+test_that("surveyzones_group_zones requires access_points when complete_distances = TRUE", {
+  za <- data.frame(tract_id = "T1", zone_id = "Z1")
+  dists <- tibble::tibble(
+    origin_id = character(0), destination_id = character(0), distance = numeric(0)
+  )
+  expect_error(
+    surveyzones_group_zones(za, dists, D_max = 10),
+    "access_points"
+  )
+})
+
+test_that("surveyzones_group_zones resolves centers after haversine completion", {
+  skip_if_not_installed("ROI.plugin.glpk")
+  za <- data.frame(
+    tract_id = c("T1", "T2", "T3"),
+    zone_id  = c("Z1", "Z1", "Z1")
+  )
+  pts <- sf::st_as_sf(
+    data.frame(
+      tract_id = c("T1", "T2", "T3"),
+      lon = c(-38.50, -38.501, -38.502),
+      lat = c(-13.00, -13.001, -13.002)
+    ),
+    coords = c("lon", "lat"), crs = 4326
+  )
+  # Only one pair supplied; the rest must come from haversine completion
+  dists <- tibble::tibble(
+    origin_id = c("T1", "T2"), destination_id = c("T2", "T1"), distance = c(1, 1)
+  )
+
+  result <- surveyzones_group_zones(
+    zone_assignments = za,
+    sparse_distances = dists,
+    D_max = 100,
+    solver = "glpk",
+    use_cache = FALSE,
+    access_points = pts,
+    complete_distances = TRUE
+  )
+
+  expect_equal(nrow(result$zones), 1L)
+  expect_true(result$zones$center_tract_id %in% za$tract_id)
+})
+
+test_that("surveyzones_group_zones anchors the first zone/group per partition to starting_points", {
+  skip_if_not_installed("ROI.plugin.glpk")
+  # 4 zones on a line per partition: Z1(0) Z2(1) Z3(2) Z4(3); D_max=10 -> 1 group.
+  # Starting point at position 3 -> the zone/group nearest it (Z4) must be first.
+  za <- tibble::tibble(
+    zone_id = paste0("Z", 1:4),
+    tract_id = paste0("Z", 1:4),
+    partition_id = "P1"
+  )
+  positions <- c(Z1 = 0, Z2 = 1, Z3 = 2, Z4 = 3)
+  pts <- sf::st_as_sf(
+    data.frame(tract_id = names(positions), lon = unname(positions), lat = 0),
+    coords = c("lon", "lat"), crs = 4326
+  )
+  dists <- tidyr::expand_grid(origin_id = names(positions), destination_id = names(positions)) |>
+    dplyr::filter(origin_id != destination_id) |>
+    dplyr::mutate(distance = abs(positions[origin_id] - positions[destination_id]))
+
+  starting_points <- sf::st_as_sf(
+    data.frame(partition_id = "P1", lon = 3, lat = 0),
+    coords = c("lon", "lat"), crs = 4326
+  )
+
+  result <- surveyzones_group_zones(
+    zone_assignments = za,
+    sparse_distances = dists,
+    D_max = 10,
+    solver = "glpk",
+    use_cache = FALSE,
+    access_points = pts,
+    complete_distances = FALSE,
+    starting_points = starting_points
+  )
+
+  expect_equal(result$zones$zone_id[result$zones$zzz == "001"], "Z4")
+  expect_equal(result$groups$center_zone_id[result$groups$ggg == "001"], "Z4")
+})
