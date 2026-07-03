@@ -17,7 +17,7 @@ matrix of distances in the requested units.
 }
 \description{
 Returns a function that computes great-circle distances between
-sf POINT objects using \code{\link[sf:geos_measures]{sf::st_distance()}}.  This is the default
+sf POINT objects using \code{\link[sf:st_distance]{sf::st_distance()}}.  This is the default
 engine used by \code{\link[=surveyzones_compute_sparse_distances]{surveyzones_compute_sparse_distances()}} when no
 engine is supplied.
 }

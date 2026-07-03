@@ -644,3 +644,120 @@ test_that("surveyzones_group_zones anchors the first zone/group per partition to
   z4_group <- result$zones$group_id[result$zones$zone_id == "Z4"]
   expect_equal(unique(result$groups$ggg[result$groups$group_id == z4_group]), "001")
 })
+
+test_that("surveyzones_group_zones end-to-end: shapes, D_max bound, labels, tract coverage", {
+  skip_if_not_installed("ROI.plugin.glpk")
+
+  # 7 zones across 2 partitions, positions on a line within each partition.
+  # Partition A: zones at 0,1,2,10,11 (5 zones); D_max=5 groups {0,1,2} and {10,11}.
+  # Partition B: zones at 0,50 (2 zones); D_max=5 -> 2 singleton groups.
+  zone_positions <- c(
+    A_Z1 = 0, A_Z2 = 1, A_Z3 = 2, A_Z4 = 10, A_Z5 = 11,
+    B_Z1 = 0, B_Z2 = 50
+  )
+  zone_partition <- c(rep("A", 5), rep("B", 2))
+  names(zone_partition) <- names(zone_positions)
+
+  # 2 tracts per zone, both located at the zone's position
+  za <- tibble::tibble(
+    zone_id = rep(names(zone_positions), each = 2),
+    tract_id = paste0(rep(names(zone_positions), each = 2), "_t", 1:2),
+    partition_id = rep(zone_partition, each = 2)
+  )
+  tract_pos <- stats::setNames(rep(zone_positions, each = 2), za$tract_id)
+
+  ids <- za$tract_id
+  dists <- tidyr::expand_grid(origin_id = ids, destination_id = ids) |>
+    dplyr::filter(origin_id != destination_id) |>
+    dplyr::mutate(distance = abs(tract_pos[origin_id] - tract_pos[destination_id]))
+
+  result <- surveyzones_group_zones(
+    zone_assignments = za,
+    sparse_distances = dists,
+    D_max = 5,
+    solver = "glpk",
+    use_cache = FALSE,
+    complete_distances = FALSE
+  )
+
+  expect_s3_class(result, "surveyzones_zone_groups")
+  expect_true(all(c("zone_id", "partition_id", "center_tract_id", "n_tracts",
+                     "group_id", "ggg", "zzz", "label") %in% names(result$zones)))
+  expect_true(all(c("group_id", "partition_id", "center_zone_id", "n_zones",
+                     "diameter", "ggg") %in% names(result$groups)))
+  expect_true(all(c("zone_id", "tract_id", "visit_order") %in% names(result$sequence)))
+
+  expect_equal(nrow(result$zones), 7L)
+  expect_equal(sort(result$sequence$tract_id), sort(za$tract_id))
+
+  # Label format
+  expect_true(all(grepl("^\\d{3}\\.\\d{3}$", result$zones$label)))
+
+  # ggg and zzz restart at 001 in each partition
+  for (pid in c("A", "B")) {
+    part_zones <- result$zones[result$zones$partition_id == pid, ]
+    expect_true("001" %in% part_zones$zzz)
+    expect_true("001" %in% part_zones$ggg)
+  }
+
+  # Partition A groups into 2 clusters (close triple + close pair)
+  a_groups <- unique(result$zones$group_id[result$zones$partition_id == "A"])
+  expect_equal(length(a_groups), 2L)
+
+  # Partition B: two zones far apart -> 2 singleton groups
+  b_groups <- unique(result$zones$group_id[result$zones$partition_id == "B"])
+  expect_equal(length(b_groups), 2L)
+
+  # No group spans two partitions: every zone in a given group_id has the
+  # same partition_id
+  partitions_per_group <- result$zones |>
+    dplyr::summarise(n_partitions = dplyr::n_distinct(.data$partition_id), .by = "group_id")
+  expect_true(all(partitions_per_group$n_partitions == 1L))
+})
+
+test_that("surveyzones_group_zones is deterministic across repeat calls", {
+  skip_if_not_installed("ROI.plugin.glpk")
+  # NOTE: without a starting_points anchor, an open-path TSP has an inherent
+  # forward/reverse tie (both directions have identical total length), so
+  # .seriate_1d()'s underlying heuristic can legitimately return either
+  # direction on different calls -- this is not a bug (the same
+  # non-determinism was independently confirmed for surveyzones_sequence_tracts()
+  # in Task 6's review). Anchoring with starting_points breaks that tie
+  # deterministically (verified empirically: 3 repeat calls with the same
+  # starting_points produced byte-identical zzz/ggg/group_id every time),
+  # so this test anchors both partitions to make the full pipeline's output
+  # deterministic, which is the property actually guaranteed by the design.
+  za <- tibble::tibble(
+    zone_id = paste0("Z", 1:6),
+    tract_id = paste0("Z", 1:6),
+    partition_id = c(rep("A", 4), rep("B", 2))
+  )
+  positions <- c(Z1 = 0, Z2 = 1, Z3 = 2, Z4 = 3, Z5 = 0, Z6 = 20)
+  ids <- names(positions)
+  pts <- sf::st_as_sf(
+    data.frame(tract_id = ids, lon = unname(positions), lat = 0),
+    coords = c("lon", "lat"), crs = 4326
+  )
+  dists <- tidyr::expand_grid(origin_id = ids, destination_id = ids) |>
+    dplyr::filter(origin_id != destination_id) |>
+    dplyr::mutate(distance = abs(positions[origin_id] - positions[destination_id]))
+
+  starting_points <- sf::st_as_sf(
+    data.frame(partition_id = c("A", "B"), lon = c(1.5, 10), lat = 0),
+    coords = c("lon", "lat"), crs = 4326
+  )
+
+  args <- list(
+    zone_assignments = za, sparse_distances = dists, D_max = 5,
+    solver = "glpk", use_cache = FALSE, access_points = pts,
+    complete_distances = FALSE, starting_points = starting_points
+  )
+  set.seed(42)
+  first <- do.call(surveyzones_group_zones, args)
+  set.seed(42)
+  second <- do.call(surveyzones_group_zones, args)
+
+  expect_equal(first$zones, second$zones)
+  expect_equal(first$groups, second$groups)
+  expect_equal(first$sequence, second$sequence)
+})
