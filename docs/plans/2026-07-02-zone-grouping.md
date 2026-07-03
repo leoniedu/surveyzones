@@ -1322,7 +1322,7 @@ git commit -m "feat: add surveyzones_zone_groups S3 constructor and print method
 
 **Interfaces:**
 - Consumes: every function from Tasks 1-7 (`.validate_zone_assignments`, `.find_zone_centers`, `.group_zones_pmedian`, `.label_zone_groups`, `.anchor_partition_order`, `.sequence_group_tracts`, `new_surveyzones_zone_groups`), plus existing `validate_solver()` and `surveyzones_complete_distances()` (unmodified).
-- Produces: exported `surveyzones_group_zones(zone_assignments, sparse_distances, D_max, solver = "glpk", max_time = 300, rel_tol = 0.01, verbose = FALSE, use_cache = TRUE, access_points = NULL, speed_kmh = 0.1, complete_distances = TRUE, starting_points = NULL, method = "TSP", control = NULL)` → `surveyzones_zone_groups` object. `starting_points` is an optional sf POINT object with a `partition_id` column, one row per partition; when a partition has a matching row, that partition's `zzz` and `ggg` orders are anchored (via `.label_zone_groups()`'s `starting_point`/`zone_centers` args) so the first zone and first group are the ones closest to it. Partitions absent from `starting_points` keep the unanchored TSP orientation. Requires `access_points` whenever `starting_points` is supplied, regardless of `complete_distances`.
+- Produces: exported `surveyzones_group_zones(zone_assignments, sparse_distances, D_max, solver = "glpk", max_time = 300, rel_tol = 0.01, verbose = FALSE, use_cache = TRUE, access_points = NULL, speed_kmh = 0.1, complete_distances = TRUE, starting_points = NULL, method = "TSP", control = NULL)` → `surveyzones_zone_groups` object. `starting_points` is an optional sf POINT object with a `partition_id` column, one row per partition; when a partition has a matching row, that partition's `zzz` and `ggg` orders are anchored (via `.label_zone_groups()`'s `starting_point`/`zone_centers` args) so the first zone and first group are the ones whose representative (the zone itself, or the group's already-computed `center_zone_id`) is closest to it — anchoring only reorders the `zzz`/`ggg` sequences, it never changes which zone the p-median solver picked as a group's `center_zone_id`. Partitions absent from `starting_points` keep the unanchored TSP orientation. Requires `access_points` whenever `starting_points` is supplied, regardless of `complete_distances`.
 
 - [ ] **Step 1: Append failing tests**
 
@@ -1399,14 +1399,19 @@ test_that("surveyzones_group_zones resolves centers after haversine completion",
 
 test_that("surveyzones_group_zones anchors the first zone/group per partition to starting_points", {
   skip_if_not_installed("ROI.plugin.glpk")
-  # 4 zones on a line per partition: Z1(0) Z2(1) Z3(2) Z4(3); D_max=10 -> 1 group.
-  # Starting point at position 3 -> the zone/group nearest it (Z4) must be first.
+  # Two groups on a line: {Z1,Z2} near position 0-1, {Z3,Z4} near position
+  # 10-11. D_max=5 keeps them as two separate groups (Z2-Z3 distance = 9 > 5).
+  # Starting point at position 11 (right at Z4) -> Z4 must be the first zone
+  # (zzz == "001"), and the group CONTAINING Z4 must be first (ggg == "001").
+  # We deliberately do not assert which zone becomes center_zone_id within
+  # that group -- anchoring reorders the group/zone sequences, it does not
+  # change which zone the p-median solver picked as a group's center.
   za <- tibble::tibble(
     zone_id = paste0("Z", 1:4),
     tract_id = paste0("Z", 1:4),
     partition_id = "P1"
   )
-  positions <- c(Z1 = 0, Z2 = 1, Z3 = 2, Z4 = 3)
+  positions <- c(Z1 = 0, Z2 = 1, Z3 = 10, Z4 = 11)
   pts <- sf::st_as_sf(
     data.frame(tract_id = names(positions), lon = unname(positions), lat = 0),
     coords = c("lon", "lat"), crs = 4326
@@ -1416,14 +1421,14 @@ test_that("surveyzones_group_zones anchors the first zone/group per partition to
     dplyr::mutate(distance = abs(positions[origin_id] - positions[destination_id]))
 
   starting_points <- sf::st_as_sf(
-    data.frame(partition_id = "P1", lon = 3, lat = 0),
+    data.frame(partition_id = "P1", lon = 11, lat = 0),
     coords = c("lon", "lat"), crs = 4326
   )
 
   result <- surveyzones_group_zones(
     zone_assignments = za,
     sparse_distances = dists,
-    D_max = 10,
+    D_max = 5,
     solver = "glpk",
     use_cache = FALSE,
     access_points = pts,
@@ -1432,7 +1437,9 @@ test_that("surveyzones_group_zones anchors the first zone/group per partition to
   )
 
   expect_equal(result$zones$zone_id[result$zones$zzz == "001"], "Z4")
-  expect_equal(result$groups$center_zone_id[result$groups$ggg == "001"], "Z4")
+
+  z4_group <- result$zones$group_id[result$zones$zone_id == "Z4"]
+  expect_equal(unique(result$groups$ggg[result$groups$group_id == z4_group]), "001")
 })
 ```
 
