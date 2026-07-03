@@ -130,3 +130,37 @@ test_that(".find_zone_centers lists all incomplete zones in one error", {
   expect_true(grepl("Z1", conditionMessage(err)))
   expect_true(grepl("Z2", conditionMessage(err)))
 })
+
+test_that(".zone_dist_sparse melts the zone distance matrix without self-pairs", {
+  assignments <- tibble::tibble(
+    tract_id = paste0("T", 1:4),
+    zone_id  = c("Z1", "Z1", "Z2", "Z2"),
+    partition_id = "P1"
+  )
+  positions <- c(T1 = 0, T2 = 1, T3 = 2, T4 = 3)
+  ids <- names(positions)
+  dists <- tidyr::expand_grid(origin_id = ids, destination_id = ids) |>
+    dplyr::filter(origin_id != destination_id) |>
+    dplyr::mutate(distance = abs(positions[origin_id] - positions[destination_id]))
+
+  out <- surveyzones:::.zone_dist_sparse(c("Z1", "Z2"), assignments, dists)
+
+  expect_true(all(c("origin_id", "destination_id", "distance") %in% names(out)))
+  expect_false(any(out$origin_id == out$destination_id))
+  # min pairwise: T2-T3 = 1
+  expect_equal(unique(out$distance), 1)
+})
+
+test_that(".zone_dist_sparse drops unreachable (Inf) zone pairs", {
+  assignments <- tibble::tibble(
+    tract_id = c("T1", "T2", "T3"),
+    zone_id  = c("Z1", "Z2", "Z3"),
+    partition_id = "P1"
+  )
+  # No distance data involving T3 at all
+  dists <- tibble::tibble(
+    origin_id = c("T1", "T2"), destination_id = c("T2", "T1"), distance = c(5, 5)
+  )
+  out <- surveyzones:::.zone_dist_sparse(c("Z1", "Z2", "Z3"), assignments, dists)
+  expect_false(any(out$origin_id == "Z3" | out$destination_id == "Z3"))
+})

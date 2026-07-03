@@ -146,3 +146,27 @@
   nested |>
     dplyr::select("zone_id", "partition_id", "center_tract_id", "n_tracts")
 }
+
+
+#' Build a Sparse Zone-to-Zone Distance Table
+#'
+#' Wraps [.build_zone_dist_matrix()] (min pairwise tract distance) and
+#' melts it into the sparse `origin_id`/`destination_id`/`distance` format
+#' used elsewhere in the package, dropping self-pairs and any unreachable
+#' (`Inf`) pairs.
+#'
+#' @param zone_ids Character vector of zone IDs.
+#' @param zone_assignments Validated zone assignments (`tract_id`,
+#'   `zone_id`).
+#' @param sparse_distances Tract-level sparse distance tibble.
+#'
+#' @return A tibble with `origin_id`, `destination_id`, `distance`
+#'   (zone IDs).
+#' @keywords internal
+.zone_dist_sparse <- function(zone_ids, zone_assignments, sparse_distances) {
+  dist_mat <- .build_zone_dist_matrix(zone_ids, zone_assignments, sparse_distances)
+  .matrix_to_sparse_dt(
+    dist_mat, rownames(dist_mat), colnames(dist_mat), D_max = Inf
+  ) |>
+    dplyr::filter(is.finite(.data$distance))
+}
