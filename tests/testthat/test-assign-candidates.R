@@ -49,3 +49,58 @@ test_that("invalid inputs abort", {
     "point_id"
   )
 })
+
+test_that("teams, span_m, ordering and ids are right", {
+  cand <- surveyzones_roteiro_candidates(pts_line(), elig_all, tract_ids = c("A", "B", "C", "D"))
+  key <- purrr::map_chr(cand$tract_ids, \(x) paste(x, collapse = "+"))
+  abc <- cand[key == "A+B+C", ]
+  expect_equal(abc$center_point_id, "b1")
+  expect_equal(abc$teams[[1]], c("t1", "t2"))
+  expect_equal(abc$span_m, 303, tolerance = 5 / 303)
+  expect_true(all(cand$span_m[lengths(cand$tract_ids) == 1L] == 0))
+  expect_equal(cand$roteiro_id, sprintf("R%04d", seq_len(nrow(cand))))
+  expect_false(is.unsorted(cand$center_tract_id))
+})
+
+test_that("dedup keeps smallest span, ties by point_id", {
+  pts <- sf::st_as_sf(
+    tibble::tibble(
+      point_id = c("p2", "p1", "q1"), tract_id = c("A", "A", "B"),
+      lon = c(-38.5, -38.5, -38.4972), lat = -13
+    ),
+    coords = c("lon", "lat"), crs = 4326
+  )
+  el <- tidyr::expand_grid(tract_id = c("A", "B"), team_id = "t1")
+  cand <- surveyzones_roteiro_candidates(pts, el, c("A", "B"))
+  ab <- cand[purrr::map_lgl(cand$tract_ids, \(x) identical(x, c("A", "B"))), ]
+  expect_equal(nrow(ab), 1L)
+  expect_equal(ab$center_point_id, "p1")
+  expect_equal(cand$center_point_id[purrr::map_lgl(cand$tract_ids, \(x) identical(x, "A"))], "p1")
+})
+
+test_that("tract without eligible team gets singleton with empty teams and warning", {
+  el <- dplyr::filter(elig_all, tract_id != "D")
+  cand <- surveyzones_roteiro_candidates(pts_line(), el, c("A", "B", "C", "D"))
+  d <- cand[purrr::map_lgl(cand$tract_ids, \(x) identical(x, "D")), ]
+  expect_equal(nrow(d), 1L)
+  expect_equal(d$teams[[1]], character())
+  expect_match(attr(cand, "warnings"), "tract D has no eligible team", all = FALSE)
+  expect_false(any(purrr::map_lgl(cand$tract_ids, \(x) length(x) > 1L && "D" %in% x)))
+})
+
+test_that("bad points abort", {
+  expect_error(
+    surveyzones_roteiro_candidates(pts_line(), elig_all, c("A", "B", "C")),
+    "D"
+  )
+  p <- pts_line()
+  p$tract_id[1] <- NA
+  expect_error(surveyzones_roteiro_candidates(p, elig_all, c("A", "B", "C", "D")), "NA")
+  p <- pts_line()
+  p$point_id[2] <- "a1"
+  expect_error(surveyzones_roteiro_candidates(p, elig_all, c("A", "B", "C", "D")), "point_id")
+  expect_error(
+    surveyzones_roteiro_candidates(pts_line(), elig_all, c("A", "B", "C", "D"), max_tracts = 2.5),
+    "max_tracts"
+  )
+})
