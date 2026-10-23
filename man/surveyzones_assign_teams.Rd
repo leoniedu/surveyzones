@@ -54,8 +54,12 @@ tracts stay with that team (and count toward its load).}
 A \code{surveyzones_assignment} object with \code{assignments}, \code{roteiros},
 \code{loads}, \code{origins}, \code{parameters} and \code{diagnostics}. In \code{assignments},
 \code{cost} is the travel time of loose tracts (\code{NA} for roteiro and fixed
-tracts; roteiro costs are in \code{roteiros}). If the model is infeasible the
-tables are empty and \code{diagnostics$solver_status} is \code{"infeasible"}.
+tracts; roteiro costs are in \code{roteiros}). If the model is infeasible,
+\code{diagnostics$solver_status} is \code{"infeasible"}, \code{diagnostics$elastic} lists
+the violated rules (\code{band_lower}, \code{band_upper}, \code{k}, \code{coverage}) with the
+\code{amount} of relaxation, and the tables hold the nearest relaxed plan.
+\code{diagnostics$min_roteiros} is the minimum number of candidate roteiros
+partitioning the mandatory tracts (teams ignored).
 }
 \description{
 Solves a mixed-integer program that assigns every tract to one team. Each

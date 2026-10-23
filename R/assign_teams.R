@@ -37,8 +37,12 @@ utils::globalVariables(c("lam", "s", "z", "a", "w", "y", "p", "q", "c", "i", "m"
 #' @return A `surveyzones_assignment` object with `assignments`, `roteiros`,
 #'   `loads`, `origins`, `parameters` and `diagnostics`. In `assignments`,
 #'   `cost` is the travel time of loose tracts (`NA` for roteiro and fixed
-#'   tracts; roteiro costs are in `roteiros`). If the model is infeasible the
-#'   tables are empty and `diagnostics$solver_status` is `"infeasible"`.
+#'   tracts; roteiro costs are in `roteiros`). If the model is infeasible,
+#'   `diagnostics$solver_status` is `"infeasible"`, `diagnostics$elastic` lists
+#'   the violated rules (`band_lower`, `band_upper`, `k`, `coverage`) with the
+#'   `amount` of relaxation, and the tables hold the nearest relaxed plan.
+#'   `diagnostics$min_roteiros` is the minimum number of candidate roteiros
+#'   partitioning the mandatory tracts (teams ignored).
 #' @export
 surveyzones_assign_teams <- function(units,
                                      points,
@@ -249,20 +253,21 @@ surveyzones_assign_teams <- function(units,
   sq_by_d <- lapply(seq_len(nd), \(d) which(sq_d == d))
   s_load <- load[ids[sq_u]]
 
-  # teams with no decision variables: only fixed load matters
+  # teams with no decision variables, or free tracts with no option, make the
+  # hard model infeasible; the elastic model diagnoses them
+  hard_infeasible <- FALSE
   for (d in seq_len(nd)) {
     if (length(ps_by_d[[d]]) == 0L && length(sq_by_d[[d]]) == 0L &&
       (fixed_load[d] < lower - 1e-9 || fixed_load[d] > upper + 1e-9)) {
-      return(finish_empty("infeasible"))
+      hard_infeasible <- TRUE
     }
   }
-  # coverage needs at least one option per free tract
   covered <- union(mem_t, sq_u)
-  if (length(setdiff(match(free_ids, ids), covered)) > 0L) {
-    return(finish_empty("infeasible"))
-  }
+  free_idx <- match(free_ids, ids)
+  nf <- length(free_idx)
+  if (length(setdiff(free_idx, covered)) > 0L) hard_infeasible <- TRUE
 
-  # variable layout: lam | s | z | a | w | y
+  # variable layout: lam | s | z | a | w | y  (| lo | hi | ek | ec when elastic)
   o_lam <- 0L
   o_s <- np
   o_z <- o_s + nsq
@@ -270,63 +275,114 @@ surveyzones_assign_teams <- function(units,
   o_w <- o_a + naq
   o_y <- o_w + nwq
   nvar <- o_y + ny
+  o_lo <- nvar
+  o_hi <- o_lo + nd
+  o_ek <- o_hi + nd
+  o_ec <- o_ek + nd
+  nvar_e <- o_ec + nf
   cost <- c(rep(0, o_a), a_cost, w_cost, rep(0, ny))
   types <- c(rep("B", o_a), rep("C", naq + nwq + ny))
 
-  rows <- .new_row_builder()
-  seq_a <- seq_len(naq)
-  # a <= z (origin) and a <= lam (valid inequality)
-  rows$add(rep(seq_a, 2), c(o_a + seq_a, o_z + (pd[a_p] - 1L) * nu + a_c), rep(c(1, -1), each = naq), naq, "<=", 0)
-  rows$add(rep(seq_a, 2), c(o_a + seq_a, o_lam + a_p), rep(c(1, -1), each = naq), naq, "<=", 0)
-  # sum_c a[r,c,d] = lam[r,d]
-  rows$add(c(a_p, seq_len(np)), c(o_a + seq_a, o_lam + seq_len(np)), c(rep(1, naq), rep(-1, np)), np, "==", 0)
-  # one origin per team; at most k roteiros per team
-  rows$add(
-    rep(seq_len(nd), each = nu), o_z + seq_len(nu * nd), rep(1, nu * nd), nd, "==", 1
-  )
-  rows$add(pd, o_lam + seq_len(np), rep(1, np), nd, "<=", k)
-  # load band
-  for (d in seq_len(nd)) {
-    if (length(ps_by_d[[d]]) + length(sq_by_d[[d]]) > 0L) {
+  build_rows <- function(elastic) {
+    rows <- .new_row_builder()
+    seq_a <- seq_len(naq)
+    # a <= z (origin) and a <= lam (valid inequality)
+    rows$add(rep(seq_a, 2), c(o_a + seq_a, o_z + (pd[a_p] - 1L) * nu + a_c), rep(c(1, -1), each = naq), naq, "<=", 0)
+    rows$add(rep(seq_a, 2), c(o_a + seq_a, o_lam + a_p), rep(c(1, -1), each = naq), naq, "<=", 0)
+    # sum_c a[r,c,d] = lam[r,d]
+    rows$add(c(a_p, seq_len(np)), c(o_a + seq_a, o_lam + seq_len(np)), c(rep(1, naq), rep(-1, np)), np, "==", 0)
+    # one origin per team; at most k roteiros per team
+    rows$add(
+      rep(seq_len(nd), each = nu), o_z + seq_len(nu * nd), rep(1, nu * nd), nd, "==", 1
+    )
+    if (elastic) {
+      rows$add(
+        c(pd, seq_len(nd)), c(o_lam + seq_len(np), o_ek + seq_len(nd)),
+        c(rep(1, np), rep(-1, nd)), nd, "<=", k
+      )
+    } else {
+      rows$add(pd, o_lam + seq_len(np), rep(1, np), nd, "<=", k)
+    }
+    # load band
+    for (d in seq_len(nd)) {
       cols <- c(o_lam + ps_by_d[[d]], o_s + sq_by_d[[d]])
       vals <- c(pW[ps_by_d[[d]]], s_load[sq_by_d[[d]]])
-      rows$add(rep(1L, length(cols)), cols, vals, 1L, ">=", lower - fixed_load[d])
-      rows$add(rep(1L, length(cols)), cols, vals, 1L, "<=", upper - fixed_load[d])
+      if (elastic) {
+        rows$add(rep(1L, length(cols) + 1L), c(cols, o_lo + d), c(vals, 1), 1L, ">=", lower - fixed_load[d])
+        rows$add(rep(1L, length(cols) + 1L), c(cols, o_hi + d), c(vals, -1), 1L, "<=", upper - fixed_load[d])
+      } else if (length(cols) > 0L) {
+        rows$add(rep(1L, length(cols)), cols, vals, 1L, ">=", lower - fixed_load[d])
+        rows$add(rep(1L, length(cols)), cols, vals, 1L, "<=", upper - fixed_load[d])
+      }
     }
+    # coverage of free tracts
+    mi <- match(mem_t, free_idx)
+    si <- match(sq_u, free_idx)
+    if (elastic) {
+      rows$add(
+        c(mi, si, seq_len(nf)), c(o_lam + mem_p, o_s + seq_len(nsq), o_ec + seq_len(nf)),
+        rep(1, length(mi) + nsq + nf), nf, "==", 1
+      )
+    } else {
+      rows$add(
+        c(mi, si), c(o_lam + mem_p, o_s + seq_len(nsq)), rep(1, length(mi) + nsq), nf, "==", 1
+      )
+    }
+    # loose tracts hang off one anchor
+    seq_w <- seq_len(nwq)
+    rows$add(rep(seq_w, 2), c(o_w + seq_w, o_s + w_q), rep(c(1, -1), each = nwq), nwq, "<=", 0)
+    nonfix <- which(!w_fixed)
+    rows$add(
+      rep(seq_along(nonfix), 2), c(o_w + nonfix, o_y + w_y), rep(c(1, -1), each = length(nonfix)),
+      length(nonfix), "<=", 0
+    )
+    gi <- match(paste(mem_t, pd[mem_p]), paste(y_key[, 1], y_key[, 2]))
+    hit <- which(!is.na(gi))
+    rows$add(
+      c(seq_len(ny), gi[hit]), c(o_y + seq_len(ny), o_lam + mem_p[hit]),
+      c(rep(1, ny), rep(-1, length(hit))), ny, "==", 0
+    )
+    rows$add(
+      c(w_q, seq_len(nsq)), c(o_w + seq_w, o_s + seq_len(nsq)),
+      c(rep(1, nwq), rep(-1, nsq)), nsq, "==", 0
+    )
+    rows
   }
-  # coverage of free tracts
-  free_idx <- match(free_ids, ids)
-  nf <- length(free_idx)
-  mi <- match(mem_t, free_idx)
-  si <- match(sq_u, free_idx)
-  rows$add(
-    c(mi, si), c(o_lam + mem_p, o_s + seq_len(nsq)), rep(1, length(mi) + nsq), nf, "==", 1
-  )
-  # loose tracts hang off one anchor
-  seq_w <- seq_len(nwq)
-  rows$add(rep(seq_w, 2), c(o_w + seq_w, o_s + w_q), rep(c(1, -1), each = nwq), nwq, "<=", 0)
-  nonfix <- which(!w_fixed)
-  rows$add(
-    rep(seq_along(nonfix), 2), c(o_w + nonfix, o_y + w_y), rep(c(1, -1), each = length(nonfix)),
-    length(nonfix), "<=", 0
-  )
-  gi <- match(paste(mem_t, pd[mem_p]), paste(y_key[, 1], y_key[, 2]))
-  hit <- which(!is.na(gi))
-  rows$add(
-    c(seq_len(ny), gi[hit]), c(o_y + seq_len(ny), o_lam + mem_p[hit]),
-    c(rep(1, ny), rep(-1, length(hit))), ny, "==", 0
-  )
-  rows$add(
-    c(w_q, seq_len(nsq)), c(o_w + seq_w, o_s + seq_len(nsq)),
-    c(rep(1, nwq), rep(-1, nsq)), nsq, "==", 0
-  )
-  op <- rows$op(cost, types, nvar)
 
-  solved <- .solve_op(op, solver = solver, max_time = max_time, rel_tol = rel_tol, verbose = verbose)
+  min_roteiros <- .min_roteiros_cover(
+    cand, intersect(mandatory, free_ids), solver, max_time, rel_tol, verbose
+  )
+  finish <- function(out) {
+    out$diagnostics$min_roteiros <- min_roteiros
+    out
+  }
+
+  solved <- list(status = "infeasible")
+  if (!hard_infeasible) {
+    op <- build_rows(FALSE)$op(cost, types, nvar)
+    solved <- .solve_op(op, solver = solver, max_time = max_time, rel_tol = rel_tol, verbose = verbose)
+  }
   if (!.is_solution_status(solved$status)) {
-    out <- finish_empty(solved$status)
-    out$diagnostics$optimality_gap <- solved$optimality_gap
-    return(out)
+    if (solved$status != "infeasible") {
+      out <- finish_empty(solved$status)
+      out$diagnostics$optimality_gap <- solved$optimality_gap
+      return(finish(out))
+    }
+    return(finish(.elastic_fallback(
+      build_rows = build_rows, nvar_e = nvar_e, types = types, cost = cost,
+      slack_cols = o_lo + seq_len(nvar_e - o_lo), o_lo = o_lo, nd = nd, nf = nf,
+      team_ids = team_ids, free_ids = free_ids, solver = solver, max_time = max_time,
+      rel_tol = rel_tol, verbose = verbose, finish_empty = finish_empty,
+      extract = \(solved, sol) .extract_assignment(
+        solved = solved, start_time = start_time, parameters = parameters,
+        cand = cand, ids = ids, team_ids = team_ids, load = load, dmat = dmat,
+        pr = pr, pd = pd, sq_u = sq_u, sq_d = sq_d, w_q = w_q, w_v = w_v, w_cost = w_cost,
+        lam_v = sol[o_lam + seq_len(np)], s_v = sol[o_s + seq_len(nsq)],
+        z_v = sol[o_z + seq_len(nu * nd)], w_sol = sol[o_w + seq_len(nwq)],
+        fixed = fixed, fixed_load = fixed_load, lower = lower, upper = upper,
+        warnings = cand_warnings
+      )
+    )))
   }
   sol <- solved$solution
   lam_v <- sol[o_lam + seq_len(np)]
@@ -349,9 +405,65 @@ surveyzones_assign_teams <- function(units,
     )
     bad <- finish_empty("error")
     bad$diagnostics$optimality_gap <- solved$optimality_gap
-    return(bad)
+    return(finish(bad))
   }
+  finish(out)
+}
+
+#' @keywords internal
+.elastic_fallback <- function(build_rows, nvar_e, types, cost, slack_cols, o_lo, nd, nf,
+                              team_ids, free_ids, solver, max_time, rel_tol, verbose,
+                              finish_empty, extract) {
+  types_e <- c(types, rep("C", nvar_e - length(types)))
+  cost1 <- replace(numeric(nvar_e), slack_cols, 1)
+  rows <- build_rows(TRUE)
+  p1 <- .solve_op(rows$op(cost1, types_e, nvar_e),
+    solver = solver, max_time = max_time, rel_tol = rel_tol, verbose = verbose
+  )
+  if (!.is_solution_status(p1$status)) return(finish_empty("infeasible"))
+  total <- sum(p1$solution[slack_cols])
+  rows$add(rep(1L, length(slack_cols)), slack_cols, rep(1, length(slack_cols)), 1L, "<=", total + 1e-6)
+  p2 <- .solve_op(rows$op(c(cost, rep(0, nvar_e - length(cost))), types_e, nvar_e),
+    solver = solver, max_time = max_time, rel_tol = rel_tol, verbose = verbose
+  )
+  fin <- if (.is_solution_status(p2$status)) p2 else p1
+  sol <- fin$solution
+  sl <- sol[slack_cols]
+  names_rule <- c(
+    rep("band_lower", nd), rep("band_upper", nd), rep("k", nd), rep("coverage", nf)
+  )
+  ids_rule <- c(team_ids, team_ids, team_ids, free_ids)
+  keep <- sl > 1e-6
+  out <- extract(fin, sol)
+  out$diagnostics$solver_status <- "infeasible"
+  out$diagnostics$elastic <- tibble::tibble(
+    rule = names_rule[keep], id = ids_rule[keep], amount = sl[keep]
+  )
   out
+}
+
+#' @keywords internal
+.min_roteiros_cover <- function(candidates, mandatory, solver, max_time = 60, rel_tol = 0.01,
+                                verbose = FALSE) {
+  if (length(mandatory) == 0L) return(0L)
+  nr <- nrow(candidates)
+  if (nr == 0L) return(NA_integer_)
+  tr <- candidates$tract_ids
+  all_t <- unique(c(mandatory, unlist(tr)))
+  ti <- match(unlist(tr), all_t)
+  ri <- rep(seq_len(nr), lengths(tr))
+  rows <- .new_row_builder()
+  is_m <- all_t %in% mandatory
+  m_rows <- cumsum(is_m)
+  sel_m <- is_m[ti]
+  rows$add(m_rows[ti][sel_m], ri[sel_m], rep(1, sum(sel_m)), sum(is_m), "==", 1)
+  o_rows <- cumsum(!is_m)
+  sel_o <- !is_m[ti]
+  rows$add(o_rows[ti][sel_o], ri[sel_o], rep(1, sum(sel_o)), sum(!is_m), "<=", 1)
+  op <- rows$op(rep(1, nr), rep("B", nr), nr)
+  res <- .solve_op(op, solver = solver, max_time = max_time, rel_tol = rel_tol, verbose = verbose)
+  if (!.is_solution_status(res$status)) return(NA_integer_)
+  as.integer(round(res$objective_value))
 }
 
 #' @keywords internal

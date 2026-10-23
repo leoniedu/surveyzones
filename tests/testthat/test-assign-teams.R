@@ -59,13 +59,14 @@ test_that("units missing from durations abort with their ids", {
   )
 })
 
-test_that("infeasible hard solve returns an empty assignment", {
+test_that("infeasible hard solve returns an elastic near-plan", {
   skip_if_not_installed("ROI.plugin.highs")
   x <- toy_instance()
   res <- surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations,
                                   mandatory = x$units$tract_id, k = 1L, tol = 0.01, solver = "highs")
   expect_equal(res$diagnostics$solver_status, "infeasible")
-  expect_equal(nrow(res$assignments), 0L)
+  expect_false(is.null(res$diagnostics$elastic))
+  expect_gt(nrow(res$diagnostics$elastic), 0L)
 })
 
 test_that("invalid inputs abort", {
@@ -93,4 +94,33 @@ test_that("objective equals roteiro plus loose costs and loose tracts have ancho
     expect_true(nrow(dur) > 0L)
     expect_equal(loose$cost[i], min(dur$distance), tolerance = 1e-6)
   }
+})
+
+test_that("floor shortfall is reported per team", {
+  skip_if_not_installed("ROI.plugin.highs")
+  x <- toy_instance()
+  elig <- dplyr::filter(x$eligible, team_id == "t1" | tract_id == "A")
+  res <- surveyzones_assign_teams(x$units, x$points, x$teams, elig, x$durations, tol = 0.1, solver = "highs")
+  expect_equal(res$diagnostics$solver_status, "infeasible")
+  e <- res$diagnostics$elastic
+  expect_true(any(e$rule == "band_lower" & e$id == "t2"))
+  expect_gt(sum(e$amount[e$rule == "band_lower" & e$id == "t2"]), 0)
+})
+
+test_that("feasible coverage but infeasible band is diagnosed, not crashed", {
+  skip_if_not_installed("ROI.plugin.highs")
+  x <- toy_instance()
+  res <- surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations,
+                                  mandatory = x$units$tract_id, k = 6L, tol = 0, solver = "highs")
+  expect_equal(res$diagnostics$solver_status, "infeasible")
+  expect_true(all(res$diagnostics$elastic$rule %in% c("band_lower", "band_upper")))
+  expect_gt(nrow(res$assignments), 0L)
+})
+
+test_that("min_roteiros is the set-partition minimum", {
+  skip_if_not_installed("ROI.plugin.highs")
+  x <- toy_instance()
+  res <- surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations,
+                                  mandatory = c("A", "B", "C"), tol = 0.5, solver = "highs")
+  expect_equal(res$diagnostics$min_roteiros, 1L)
 })

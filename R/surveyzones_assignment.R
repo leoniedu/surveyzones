@@ -32,6 +32,9 @@ new_surveyzones_assignment <- function(assignments, roteiros, loads, origins,
 print.surveyzones_assignment <- function(x, ...) {
   cli::cli_h1("surveyzones assignment")
   status <- x$diagnostics$solver_status
+  if (!is.null(x$diagnostics$elastic)) {
+    cli::cli_bullets(c("x" = "INFEASIBLE \u2014 see $diagnostics$elastic"))
+  }
   if (nrow(x$assignments) == 0L) {
     cli::cli_bullets(c("!" = "No assignment (solver status: {.val {status}})"))
     return(invisible(x))
