@@ -48,7 +48,12 @@ print.surveyzones_assignment <- function(x, ...) {
   if (status == "optimal") {
     cli::cli_bullets(c("v" = "Solved optimally"))
   } else {
-    cli::cli_bullets(c("!" = "Solver status: {.val {status}}"))
+    gap <- x$diagnostics$optimality_gap
+    if (identical(status, "feasible") && length(gap) == 1L && is.finite(gap)) {
+      cli::cli_bullets(c("!" = "Solver status: {.val {status}} (optimality gap {round(100 * gap, 2)}%)"))
+    } else {
+      cli::cli_bullets(c("!" = "Solver status: {.val {status}}"))
+    }
   }
   invisible(x)
 }

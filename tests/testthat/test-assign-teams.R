@@ -124,3 +124,30 @@ test_that("min_roteiros is the set-partition minimum", {
                                   mandatory = c("A", "B", "C"), tol = 0.5, solver = "highs")
   expect_equal(res$diagnostics$min_roteiros, 1L)
 })
+
+test_that(".solve_op classifies infeasible and optimal via the solver status symbol", {
+  skip_if_not_installed("ROI.plugin.highs")
+  mk <- function(rhs) {
+    ROI::OP(
+      ROI::L_objective(c(1, 1)),
+      ROI::L_constraint(matrix(c(1, 1), 1), "<=", rhs),
+      types = c("B", "B"), maximum = TRUE
+    )
+  }
+  bad <- .solve_op(mk(-1), "highs", max_time = 10, rel_tol = 0, verbose = FALSE)
+  expect_equal(bad$status, "infeasible")
+  expect_null(bad$solution)
+  ok <- .solve_op(mk(1), "highs", max_time = 10, rel_tol = 0, verbose = FALSE)
+  expect_equal(ok$status, "optimal")
+  expect_equal(ok$objective_value, 1)
+})
+
+test_that("print shows the gap for feasible-but-not-optimal solves", {
+  skip_if_not_installed("ROI.plugin.highs")
+  x <- toy_instance()
+  res <- surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations,
+                                  k = 2L, tol = 0.5, solver = "highs")
+  res$diagnostics$solver_status <- "feasible"
+  res$diagnostics$optimality_gap <- 0.034
+  expect_match(paste(cli::cli_fmt(print(res)), collapse = "\n"), "3.4%")
+})

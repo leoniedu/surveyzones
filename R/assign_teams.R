@@ -1,5 +1,3 @@
-utils::globalVariables(c("lam", "s", "z", "a", "w", "y", "p", "q", "c", "i", "m", "g", "j"))
-
 #' Assign Teams to Tracts with Walkable Roteiros
 #'
 #' Solves a mixed-integer program that assigns every tract to one team. Each
@@ -592,20 +590,33 @@ surveyzones_assign_teams <- function(units,
   params$solver <- NULL
   sol <- ROI::ROI_solve(op, solver = solver_name, control = params)
   msg <- tryCatch(sol$message, error = function(e) NULL)
-  text <- paste(c(msg$status_message, msg$status, sol$status$msg$message, sol$status$msg$code), collapse = " ")
+  text <- paste(c(msg$status_message, msg$status, sol$status$msg$message), collapse = " ")
+  symbol <- toupper(as.character(tryCatch(sol$status$msg$symbol, error = function(e) NULL))[1])
+  if (length(symbol) != 1L || is.na(symbol)) symbol <- ""
   obj <- tryCatch(as.numeric(sol$objval), error = function(e) NA_real_)
-  has_sol <- length(sol$solution) > 0L && is.finite(obj) && !anyNA(sol$solution) &&
-    !isTRUE(grepl("infeasible", text, ignore.case = TRUE))
+  has_full <- length(sol$solution) > 0L && length(obj) == 1L && is.finite(obj) && !anyNA(sol$solution)
   gap <- tryCatch(as.numeric(msg$info$mip_gap), error = function(e) NA_real_)
   if (length(gap) != 1L || !is.finite(gap)) gap <- NA_real_
-  status <- if (grepl("infeasible", text, ignore.case = TRUE)) {
-    "infeasible"
-  } else if (has_sol && sol$status$code == 0L) {
-    "optimal"
-  } else if (has_sol) {
-    "feasible"
+  infeasible_symbols <- c("INFEASIBLE", "UNBOUNDEDORINFEASIBLE", "INFEASIBLE_OR_UNBOUNDED")
+  if (symbol %in% infeasible_symbols) {
+    status <- "infeasible"
+    has_sol <- FALSE
+  } else if (nzchar(symbol)) {
+    has_sol <- has_full
+    status <- if (has_sol && symbol == "OPTIMAL") "optimal" else if (has_sol) "feasible" else "error"
   } else {
-    "error"
+    # unknown solver without a status symbol: fall back to message text
+    infeasible <- grepl("infeasible|no feasible", text, ignore.case = TRUE)
+    has_sol <- has_full && !infeasible
+    status <- if (infeasible) {
+      "infeasible"
+    } else if (has_sol && isTRUE(sol$status$code == 0L)) {
+      "optimal"
+    } else if (has_sol) {
+      "feasible"
+    } else {
+      "error"
+    }
   }
   list(
     status = status, objective_value = if (has_sol) obj else NA_real_,
