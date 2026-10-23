@@ -1,3 +1,12 @@
+# surveyzones 0.0.0.9004
+
+* `surveyzones_assign_teams(origins = )` accepts given origin tracts (one or
+  more per team). Listed teams get no origin variables; each roteiro costs the
+  minimum over their origins of the directed duration to its centre. Unlisted
+  teams keep the model-chosen origin. `origins` in the result gains a `source`
+  column (`"given"`/`"model"`), and the input is stored in `parameters$origins`.
+  After upgrading, run `surveyzones_clear_cache()`.
+
 # surveyzones 0.0.0.9003
 
 * `surveyzones_assign_teams(use_cache = TRUE)` memoises the whole solve on disk

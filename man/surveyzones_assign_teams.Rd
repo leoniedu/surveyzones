@@ -12,6 +12,7 @@ surveyzones_assign_teams(
   durations,
   mandatory = character(),
   fixed = NULL,
+  origins = NULL,
   k = 5L,
   radius_m = 500,
   tol = 0.15,
@@ -43,6 +44,15 @@ zero.}
 \item{fixed}{\code{NULL} or a data frame with \code{tract_id} and \code{team_id}; these
 tracts stay with that team (and count toward its load).}
 
+\item{origins}{\code{NULL} or a data frame with \code{team_id} and \code{tract_id}, one or
+more rows per team (e.g. each dupla member's home base snapped to a tract).
+A listed team has a given origin: the model does not choose one, and the
+cost of each of its roteiros is the minimum over its origin tracts of the
+directed duration to the roteiro centre (0 when origin and centre
+coincide). Pairs missing from \code{durations} are skipped; a roteiro with no
+usable origin is not offered to that team. Unlisted teams keep the
+model-chosen origin. The cost of loose tracts is unchanged.}
+
 \item{k}{Maximum number of roteiros per team: a whole number >= 1, or
 \code{"auto"}. With \code{"auto"}, \code{k_min = ceiling(min_roteiros / n_teams)} is
 computed from the minimum number of roteiros that partition the mandatory
@@ -67,7 +77,9 @@ original solve, not of the lookup.}
 }
 \value{
 A \code{surveyzones_assignment} object with \code{assignments}, \code{roteiros},
-\code{loads}, \code{origins}, \code{parameters} and \code{diagnostics}. In \code{assignments},
+\code{loads}, \code{origins}, \code{parameters} and \code{diagnostics}. \code{origins} has one row
+per team with a \code{source} of \code{"model"}, and one row per origin tract for
+teams with \code{source = "given"}. In \code{assignments},
 \code{cost} is the travel time of loose tracts (\code{NA} for roteiro and fixed
 tracts; roteiro costs are in \code{roteiros}). If the model is infeasible,
 \code{diagnostics$solver_status} is \code{"infeasible"}, \code{diagnostics$elastic} lists
@@ -81,7 +93,8 @@ Solves a mixed-integer program that assigns every tract to one team. Each
 tract is either in a \emph{roteiro} (a walkable set of tracts, see
 \code{\link[=surveyzones_roteiro_candidates]{surveyzones_roteiro_candidates()}}) worked from a single centre, or \emph{loose}
 (reached from an anchor tract of the same team), or \emph{fixed} to a team.
-Mandatory tracts must be in a roteiro. Each team has one origin tract; the
+Mandatory tracts must be in a roteiro. Each team has one origin tract (chosen
+by the model, or given through \code{origins}); the
 objective is the total directed travel time from team origins to roteiro
 centres plus from anchors to loose tracts. Every team's load must lie in
 \verb{[(1 - tol), (1 + tol)] * mean}, with \code{mean} the total load over all units

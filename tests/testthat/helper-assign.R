@@ -27,7 +27,7 @@ toy_instance <- function(n = 6) {
 
 # Exhaustive optimum when every tract is mandatory (no loose/fixed tracts):
 # every exact cover of the tracts by candidate roteiros, every team assignment.
-brute_force_objective <- function(x, k, tol, radius_m = 500, max_tracts = 5L) {
+brute_force_objective <- function(x, k, tol, radius_m = 500, max_tracts = 5L, origins = NULL) {
   ids <- x$units$tract_id
   load <- stats::setNames(x$units$expected_service_time, ids)
   teams <- x$teams$team_id
@@ -63,6 +63,10 @@ brute_force_objective <- function(x, k, tol, radius_m = 500, max_tracts = 5L) {
       cost <- sum(vapply(teams, \(d) {
         mine <- cv[tm == d]
         if (length(mine) == 0L) return(0)
+        if (!is.null(origins) && d %in% origins$team_id) {
+          og <- origins$tract_id[origins$team_id == d]
+          return(sum(vapply(mine, \(i) min(vapply(og, \(o) dur(o, cand$center_tract_id[i]), numeric(1))), numeric(1))))
+        }
         min(vapply(ids, \(o) sum(vapply(mine, \(i) dur(o, cand$center_tract_id[i]), numeric(1))), numeric(1)))
       }, numeric(1)))
       best <- min(best, cost)

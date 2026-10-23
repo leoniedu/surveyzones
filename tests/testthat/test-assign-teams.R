@@ -259,3 +259,111 @@ test_that("surveyzones_clear_cache(force = TRUE) clears the assign_teams cache",
   expect_length(list.files(tmp, recursive = TRUE), 0L)
   expect_message(run(), "Computing and caching")
 })
+
+.origin_cost <- function(x, res, origins) {
+  vapply(seq_len(nrow(res$roteiros)), \(i) {
+    og <- origins$tract_id[origins$team_id == res$roteiros$team_id[i]]
+    ctr <- res$roteiros$center_tract_id[i]
+    min(vapply(og, \(o) {
+      if (o == ctr) return(0)
+      x$durations$distance[x$durations$origin_id == o & x$durations$destination_id == ctr]
+    }, numeric(1)))
+  }, numeric(1))
+}
+
+test_that("given origins fix roteiro costs for all teams", {
+  skip_if_not_installed("ROI.plugin.highs")
+  x <- toy_instance()
+  og <- tibble::tibble(team_id = c("t1", "t2"), tract_id = c("A", "F"))
+  res <- surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations,
+                                  mandatory = x$units$tract_id, origins = og, k = 3L, max_tracts = 1L,
+                                  tol = 1, solver = "highs", use_cache = FALSE)
+  expect_equal(res$roteiros$cost, .origin_cost(x, res, og))
+  expect_true(any(res$roteiros$cost > 0))
+  expect_equal(res$origins$source, c("given", "given"))
+  expect_setequal(res$origins$origin_tract_id, c("A", "F"))
+  expect_identical(res$parameters$origins, og)
+})
+
+test_that("mixed given and model origins both behave", {
+  skip_if_not_installed("ROI.plugin.highs")
+  x <- toy_instance()
+  og <- tibble::tibble(team_id = "t1", tract_id = "A")
+  res <- surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations,
+                                  mandatory = x$units$tract_id, origins = og, k = 3L, max_tracts = 1L,
+                                  tol = 1, solver = "highs", use_cache = FALSE)
+  expect_equal(res$origins$source[res$origins$team_id == "t1"], "given")
+  expect_equal(res$origins$source[res$origins$team_id == "t2"], "model")
+  expect_equal(nrow(res$origins), 2L)
+  r1 <- res$roteiros[res$roteiros$team_id == "t1", ]
+  expect_equal(r1$cost, .origin_cost(x, list(roteiros = r1), og))
+  r2 <- res$roteiros[res$roteiros$team_id == "t2", ]
+  o2 <- res$origins$origin_tract_id[res$origins$team_id == "t2"]
+  expect_equal(r2$cost, .origin_cost(x, list(roteiros = r2), tibble::tibble(team_id = "t2", tract_id = o2)))
+  expect_equal(res$diagnostics$objective_value, sum(res$roteiros$cost) + sum(res$loads$loose_cost), tolerance = 1e-6)
+})
+
+test_that("two origins per team use the closer one", {
+  skip_if_not_installed("ROI.plugin.highs")
+  x <- toy_instance()
+  og <- tibble::tibble(team_id = c("t1", "t1", "t2", "t2"), tract_id = c("A", "F", "B", "E"))
+  res <- surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations,
+                                  mandatory = x$units$tract_id, origins = og, k = 3L, max_tracts = 1L,
+                                  tol = 1, solver = "highs", use_cache = FALSE)
+  expect_equal(nrow(res$origins), 4L)
+  expect_equal(res$roteiros$cost, .origin_cost(x, res, og))
+})
+
+test_that("optimal with given origins (brute force)", {
+  skip_if_not_installed("ROI.plugin.highs")
+  x <- toy_instance(n = 4)
+  og <- tibble::tibble(team_id = c("t1", "t1", "t2"), tract_id = c("A", "D", "B"))
+  res <- surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations,
+                                  mandatory = x$units$tract_id, origins = og, k = 2L, tol = 0.5,
+                                  solver = "highs", use_cache = FALSE)
+  expect_equal(res$diagnostics$objective_value,
+               brute_force_objective(x, k = 2L, tol = 0.5, origins = og), tolerance = 1e-6)
+})
+
+test_that("invalid origins abort naming offenders", {
+  x <- toy_instance()
+  run <- function(og) {
+    surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations,
+                             origins = og, solver = "highs", use_cache = FALSE)
+  }
+  expect_error(run(tibble::tibble(team_id = "tX", tract_id = "A")), "tX")
+  expect_error(run(tibble::tibble(team_id = "t1", tract_id = "ZZ")), "ZZ")
+  expect_error(run(tibble::tibble(team_id = "t1")), "origins")
+})
+
+test_that("origins work with the elastic fallback and min_roteiros", {
+  skip_if_not_installed("ROI.plugin.highs")
+  x <- toy_instance()
+  og <- tibble::tibble(team_id = "t1", tract_id = "A")
+  res <- surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations,
+                                  mandatory = x$units$tract_id, origins = og, k = 1L, tol = 0.01,
+                                  solver = "highs", use_cache = FALSE)
+  expect_equal(res$diagnostics$solver_status, "infeasible")
+  expect_gt(nrow(res$diagnostics$elastic), 0L)
+  expect_true("given" %in% res$origins$source)
+  expect_true(is.integer(res$diagnostics$min_roteiros))
+  auto <- surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations,
+                                   mandatory = x$units$tract_id, origins = og, k = "auto", tol = 1,
+                                   solver = "highs", use_cache = FALSE)
+  expect_true(auto$parameters$k_auto)
+})
+
+test_that("use_cache: changing origins misses", {
+  skip_if_not_installed("ROI.plugin.highs")
+  local_assign_cache()
+  x <- toy_instance()
+  run <- function(og) {
+    surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations,
+                             origins = og, k = 2L, tol = 0.5, solver = "highs")
+  }
+  og1 <- tibble::tibble(team_id = "t1", tract_id = "A")
+  expect_message(run(og1), "Computing and caching")
+  expect_message(run(og1), "Using cached")
+  expect_message(run(tibble::tibble(team_id = "t1", tract_id = "B")), "Computing and caching")
+  expect_message(run(NULL), "Computing and caching")
+})

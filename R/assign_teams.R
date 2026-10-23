@@ -4,7 +4,8 @@
 #' tract is either in a *roteiro* (a walkable set of tracts, see
 #' [surveyzones_roteiro_candidates()]) worked from a single centre, or *loose*
 #' (reached from an anchor tract of the same team), or *fixed* to a team.
-#' Mandatory tracts must be in a roteiro. Each team has one origin tract; the
+#' Mandatory tracts must be in a roteiro. Each team has one origin tract (chosen
+#' by the model, or given through `origins`); the
 #' objective is the total directed travel time from team origins to roteiro
 #' centres plus from anchors to loose tracts. Every team's load must lie in
 #' `[(1 - tol), (1 + tol)] * mean`, with `mean` the total load over all units
@@ -27,6 +28,14 @@
 #' @param mandatory Character vector of tract ids that must be in a roteiro.
 #' @param fixed `NULL` or a data frame with `tract_id` and `team_id`; these
 #'   tracts stay with that team (and count toward its load).
+#' @param origins `NULL` or a data frame with `team_id` and `tract_id`, one or
+#'   more rows per team (e.g. each dupla member's home base snapped to a tract).
+#'   A listed team has a given origin: the model does not choose one, and the
+#'   cost of each of its roteiros is the minimum over its origin tracts of the
+#'   directed duration to the roteiro centre (0 when origin and centre
+#'   coincide). Pairs missing from `durations` are skipped; a roteiro with no
+#'   usable origin is not offered to that team. Unlisted teams keep the
+#'   model-chosen origin. The cost of loose tracts is unchanged.
 #' @param k Maximum number of roteiros per team: a whole number >= 1, or
 #'   `"auto"`. With `"auto"`, `k_min = ceiling(min_roteiros / n_teams)` is
 #'   computed from the minimum number of roteiros that partition the mandatory
@@ -46,7 +55,9 @@
 #'   original solve, not of the lookup.
 #'
 #' @return A `surveyzones_assignment` object with `assignments`, `roteiros`,
-#'   `loads`, `origins`, `parameters` and `diagnostics`. In `assignments`,
+#'   `loads`, `origins`, `parameters` and `diagnostics`. `origins` has one row
+#'   per team with a `source` of `"model"`, and one row per origin tract for
+#'   teams with `source = "given"`. In `assignments`,
 #'   `cost` is the travel time of loose tracts (`NA` for roteiro and fixed
 #'   tracts; roteiro costs are in `roteiros`). If the model is infeasible,
 #'   `diagnostics$solver_status` is `"infeasible"`, `diagnostics$elastic` lists
@@ -62,6 +73,7 @@ surveyzones_assign_teams <- function(units,
                                      durations,
                                      mandatory = character(),
                                      fixed = NULL,
+                                     origins = NULL,
                                      k = 5L,
                                      radius_m = 500,
                                      tol = 0.15,
@@ -98,7 +110,7 @@ surveyzones_assign_teams <- function(units,
   core_args <- list(
     units = units, points_df = points_df, crs = crs, teams = teams,
     eligible = eligible, durations = durations, mandatory = mandatory,
-    fixed = fixed, k = k, radius_m = radius_m, tol = tol,
+    fixed = fixed, origins = origins, k = k, radius_m = radius_m, tol = tol,
     max_tracts = max_tracts, solver = solver, max_time = max_time,
     rel_tol = rel_tol, verbose = verbose
   )
@@ -123,6 +135,7 @@ surveyzones_assign_teams <- function(units,
                                durations,
                                mandatory,
                                fixed,
+                               origins,
                                k,
                                radius_m,
                                tol,
@@ -191,6 +204,31 @@ surveyzones_assign_teams <- function(units,
   if (anyDuplicated(fixed$tract_id)) {
     cli::cli_abort("{.arg fixed} must have at most one team per tract.")
   }
+  if (is.null(origins)) {
+    origins_in <- NULL
+    origins <- tibble::tibble(team_id = character(), tract_id = character())
+  } else {
+    if (!is.data.frame(origins) || !all(c("team_id", "tract_id") %in% names(origins))) {
+      cli::cli_abort("{.arg origins} must be {.code NULL} or a data frame with {.field team_id} and {.field tract_id}.")
+    }
+    origins_in <- origins
+    origins <- dplyr::distinct(dplyr::mutate(
+      origins[c("team_id", "tract_id")],
+      team_id = as.character(.data$team_id), tract_id = as.character(.data$tract_id)
+    ))
+  }
+  bad <- setdiff(origins$team_id, team_ids)
+  if (length(bad) > 0L) {
+    cli::cli_abort("{.arg origins} has unknown teams: {.val {bad}}.")
+  }
+  bad <- setdiff(origins$tract_id, ids)
+  if (length(bad) > 0L) {
+    cli::cli_abort("{.arg origins} has unknown tracts: {.val {bad}}.")
+  }
+  bad <- setdiff(origins$tract_id, seen_dur)
+  if (length(bad) > 0L) {
+    cli::cli_abort("{.arg origins} has tracts missing from {.arg durations}: {.val {bad}}.")
+  }
   pt_unknown <- setdiff(unique(as.character(points$tract_id)), ids)
   if (length(pt_unknown) > 0L) {
     cli::cli_abort("{.arg points} has tracts not in {.arg units}: {.val {pt_unknown}}.")
@@ -247,7 +285,7 @@ surveyzones_assign_teams <- function(units,
   parameters <- list(
     k = k, k_auto = k_auto, k_min = k_min, radius_m = radius_m, tol = tol, max_tracts = as.integer(max_tracts),
     solver = solver, max_time = max_time, rel_tol = rel_tol,
-    n_mandatory = length(mandatory), n_fixed = nrow(fixed)
+    n_mandatory = length(mandatory), n_fixed = nrow(fixed), origins = origins_in
   )
   finish_empty <- function(status) {
     new_surveyzones_assignment(
@@ -257,7 +295,9 @@ surveyzones_assign_teams <- function(units,
         team_id = team_ids, workload = fixed_load, n_roteiros = 0L, n_loose = 0L,
         loose_cost = 0, lower = lower, upper = upper
       ),
-      origins = tibble::tibble(team_id = character(), origin_tract_id = character()),
+      origins = tibble::tibble(
+        team_id = character(), origin_tract_id = character(), source = character()
+      ),
       parameters = parameters,
       diagnostics = list(
         solver_status = status, objective_value = NA_real_, optimality_gap = NA_real_,
@@ -274,9 +314,25 @@ surveyzones_assign_teams <- function(units,
   ord <- order(pr, pd)
   pr <- pr[ord]
   pd <- pd[ord]
+  r_center <- match(cand$center_tract_id, ids)
+  given_idx <- lapply(team_ids, \(d) match(origins$tract_id[origins$team_id == d], ids))
+  is_given <- lengths(given_idx) > 0L
+  model_d <- which(!is_given)
+  nmd <- length(model_d)
+  pair_cost <- numeric(length(pr))
+  for (d in which(is_given)) {
+    sel <- which(pd == d)
+    pair_cost[sel] <- vapply(sel, \(p) {
+      v <- dmat[given_idx[[d]], r_center[pr[p]]]
+      if (all(is.na(v))) NA_real_ else min(v, na.rm = TRUE)
+    }, numeric(1))
+  }
+  usable <- !is.na(pair_cost)
+  pr <- pr[usable]
+  pd <- pd[usable]
+  pair_cost <- pair_cost[usable]
   np <- length(pr)
   r_load <- vapply(cand$tract_ids, \(x) sum(load[x]), numeric(1))
-  r_center <- match(cand$center_tract_id, ids)
   pW <- r_load[pr]
 
   # roteiro membership rows (pair, tract)
@@ -293,8 +349,9 @@ surveyzones_assign_teams <- function(units,
   nsq <- length(sq_u)
 
   # a rows: (pair, origin tract)
-  a_p <- rep(seq_len(np), each = nu)
-  a_c <- rep(seq_len(nu), times = np)
+  mp <- which(!is_given[pd])
+  a_p <- rep(mp, each = nu)
+  a_c <- rep(seq_len(nu), times = length(mp))
   a_cost <- dmat[cbind(a_c, r_center[pr[a_p]])]
   keep <- !is.na(a_cost)
   a_p <- a_p[keep]
@@ -348,7 +405,7 @@ surveyzones_assign_teams <- function(units,
   o_lam <- 0L
   o_s <- np
   o_z <- o_s + nsq
-  o_a <- o_z + nu * nd
+  o_a <- o_z + nu * nmd
   o_w <- o_a + naq
   o_y <- o_w + nwq
   nvar <- o_y + ny
@@ -357,20 +414,23 @@ surveyzones_assign_teams <- function(units,
   o_ek <- o_hi + nd
   o_ec <- o_ek + nd
   nvar_e <- o_ec + nf
-  cost <- c(rep(0, o_a), a_cost, w_cost, rep(0, ny))
+  cost <- c(pair_cost, rep(0, o_a - np), a_cost, w_cost, rep(0, ny))
   types <- c(rep("B", o_a), rep("C", naq + nwq + ny))
 
   build_rows <- function(elastic) {
     rows <- .new_row_builder()
     seq_a <- seq_len(naq)
     # a <= z (origin) and a <= lam (valid inequality)
-    rows$add(rep(seq_a, 2), c(o_a + seq_a, o_z + (pd[a_p] - 1L) * nu + a_c), rep(c(1, -1), each = naq), naq, "<=", 0)
+    rows$add(rep(seq_a, 2), c(o_a + seq_a, o_z + (match(pd[a_p], model_d) - 1L) * nu + a_c), rep(c(1, -1), each = naq), naq, "<=", 0)
     rows$add(rep(seq_a, 2), c(o_a + seq_a, o_lam + a_p), rep(c(1, -1), each = naq), naq, "<=", 0)
     # sum_c a[r,c,d] = lam[r,d]
-    rows$add(c(a_p, seq_len(np)), c(o_a + seq_a, o_lam + seq_len(np)), c(rep(1, naq), rep(-1, np)), np, "==", 0)
+    rows$add(
+      c(match(a_p, mp), seq_along(mp)), c(o_a + seq_a, o_lam + mp),
+      c(rep(1, naq), rep(-1, length(mp))), length(mp), "==", 0
+    )
     # one origin per team; at most k roteiros per team
     rows$add(
-      rep(seq_len(nd), each = nu), o_z + seq_len(nu * nd), rep(1, nu * nd), nd, "==", 1
+      rep(seq_len(nmd), each = nu), o_z + seq_len(nu * nmd), rep(1, nu * nmd), nmd, "==", 1
     )
     if (elastic) {
       rows$add(
@@ -452,7 +512,8 @@ surveyzones_assign_teams <- function(units,
         cand = cand, ids = ids, team_ids = team_ids, load = load, dmat = dmat,
         pr = pr, pd = pd, sq_u = sq_u, sq_d = sq_d, w_q = w_q, w_v = w_v, w_cost = w_cost,
         lam_v = sol[o_lam + seq_len(np)], s_v = sol[o_s + seq_len(nsq)],
-        z_v = sol[o_z + seq_len(nu * nd)], w_sol = sol[o_w + seq_len(nwq)],
+        z_v = sol[o_z + seq_len(nu * nmd)], w_sol = sol[o_w + seq_len(nwq)],
+        model_d = model_d, given_idx = given_idx,
         fixed = fixed, fixed_load = fixed_load, lower = lower, upper = upper,
         warnings = cand_warnings
       )
@@ -461,13 +522,14 @@ surveyzones_assign_teams <- function(units,
   sol <- solved$solution
   lam_v <- sol[o_lam + seq_len(np)]
   s_v <- sol[o_s + seq_len(nsq)]
-  z_v <- sol[o_z + seq_len(nu * nd)]
+  z_v <- sol[o_z + seq_len(nu * nmd)]
   w_v_sol <- sol[o_w + seq_len(nwq)]
   out <- .extract_assignment(
     solved = solved, start_time = start_time, parameters = parameters,
     cand = cand, ids = ids, team_ids = team_ids, load = load, dmat = dmat,
     pr = pr, pd = pd, sq_u = sq_u, sq_d = sq_d, w_q = w_q, w_v = w_v, w_cost = w_cost,
     lam_v = lam_v, s_v = s_v, z_v = z_v, w_sol = w_v_sol,
+    model_d = model_d, given_idx = given_idx,
     fixed = fixed, fixed_load = fixed_load, lower = lower, upper = upper,
     warnings = cand_warnings
   )
@@ -543,14 +605,18 @@ surveyzones_assign_teams <- function(units,
 #' @keywords internal
 .extract_assignment <- function(solved, start_time, parameters, cand, ids, team_ids, load, dmat,
                                 pr, pd, sq_u, sq_d, w_q, w_v, w_cost, lam_v, s_v, z_v, w_sol,
-                                fixed, fixed_load, lower, upper, warnings) {
+                                model_d, given_idx, fixed, fixed_load, lower, upper, warnings) {
   nu <- length(ids)
   nd <- length(team_ids)
-  origin <- vapply(seq_len(nd), \(d) {
-    zz <- z_v[(d - 1L) * nu + seq_len(nu)]
-    which.max(zz)
-  }, integer(1))
-  origins <- tibble::tibble(team_id = team_ids, origin_tract_id = ids[origin])
+  origin_idx <- given_idx
+  for (m in seq_along(model_d)) {
+    origin_idx[[model_d[m]]] <- which.max(z_v[(m - 1L) * nu + seq_len(nu)])
+  }
+  origins <- tibble::tibble(
+    team_id = rep(team_ids, lengths(origin_idx)),
+    origin_tract_id = ids[unlist(origin_idx)],
+    source = rep(ifelse(lengths(given_idx) > 0L, "given", "model"), lengths(origin_idx))
+  )
 
   chosen <- which(lam_v > 0.5)
   rot <- tibble::tibble(
@@ -561,7 +627,10 @@ surveyzones_assign_teams <- function(units,
     n_tracts = lengths(cand$tract_ids[pr[chosen]]),
     workload = vapply(cand$tract_ids[pr[chosen]], \(x) sum(load[x]), numeric(1)),
     span_m = cand$span_m[pr[chosen]],
-    cost = dmat[cbind(origin[pd[chosen]], match(cand$center_tract_id[pr[chosen]], ids))]
+    cost = vapply(chosen, \(p) {
+      v <- dmat[origin_idx[[pd[p]]], match(cand$center_tract_id[pr[p]], ids)]
+      min(v, na.rm = TRUE)
+    }, numeric(1))
   )
   from_rot <- tibble::tibble(
     tract_id = unlist(cand$tract_ids[pr[chosen]]),
