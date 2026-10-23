@@ -27,7 +27,14 @@
 #' @param mandatory Character vector of tract ids that must be in a roteiro.
 #' @param fixed `NULL` or a data frame with `tract_id` and `team_id`; these
 #'   tracts stay with that team (and count toward its load).
-#' @param k Maximum number of roteiros per team.
+#' @param k Maximum number of roteiros per team: a whole number >= 1, or
+#'   `"auto"`. With `"auto"`, `k_min = ceiling(min_roteiros / n_teams)` is
+#'   computed from the minimum number of roteiros that partition the mandatory
+#'   tracts (`diagnostics$min_roteiros`) and `k = max(k_min + 1, ceiling(1.5 *
+#'   k_min))`. `k_min` is only a lower bound: team eligibility can require
+#'   more roteiros per team, in which case the model is infeasible and the
+#'   elastic diagnosis reports the `k` rule. The `k` used, `k_auto` and `k_min`
+#'   are stored in `parameters`.
 #' @param radius_m,max_tracts See [surveyzones_roteiro_candidates()].
 #' @param tol Non-negative load tolerance around the mean.
 #' @param solver,max_time,rel_tol,verbose Solver settings.
@@ -65,8 +72,9 @@ surveyzones_assign_teams <- function(units,
       "{.arg points} must be an sf object with {.field tract_id} and {.field point_id} columns."
     )
   }
-  if (!is.numeric(k) || length(k) != 1L || is.na(k) || k < 1) {
-    cli::cli_abort("{.arg k} must be a single number >= 1.")
+  k_auto <- identical(k, "auto")
+  if (!k_auto && (!is.numeric(k) || length(k) != 1L || is.na(k) || k < 1 || k != round(k))) {
+    cli::cli_abort("{.arg k} must be a whole number >= 1 or {.val auto}.")
   }
   if (!is.numeric(tol) || length(tol) != 1L || is.na(tol) || tol < 0) {
     cli::cli_abort("{.arg tol} must be a single number >= 0.")
@@ -165,8 +173,24 @@ surveyzones_assign_teams <- function(units,
     cand_warnings <- character()
   }
 
+  min_roteiros <- .min_roteiros_cover(
+    cand, intersect(mandatory, free_ids), solver, max_time, rel_tol, verbose
+  )
+  k_min <- NA_integer_
+  if (k_auto) {
+    if (is.na(min_roteiros)) {
+      cli::cli_abort(c(
+        "Cannot choose {.arg k} automatically: the minimum number of roteiros is unknown.",
+        "i" = "Mandatory tracts cannot be covered by candidate roteiros or the cover problem was not solved; pass an explicit {.arg k}."
+      ))
+    }
+    k_min <- as.integer(ceiling(min_roteiros / nd))
+    k <- max(k_min + 1L, as.integer(ceiling(1.5 * k_min)))
+  }
+  k <- as.integer(k)
+
   parameters <- list(
-    k = as.integer(k), radius_m = radius_m, tol = tol, max_tracts = as.integer(max_tracts),
+    k = k, k_auto = k_auto, k_min = k_min, radius_m = radius_m, tol = tol, max_tracts = as.integer(max_tracts),
     solver = solver, max_time = max_time, rel_tol = rel_tol,
     n_mandatory = length(mandatory), n_fixed = nrow(fixed)
   )
@@ -347,9 +371,6 @@ surveyzones_assign_teams <- function(units,
     rows
   }
 
-  min_roteiros <- .min_roteiros_cover(
-    cand, intersect(mandatory, free_ids), solver, max_time, rel_tol, verbose
-  )
   finish <- function(out) {
     out$diagnostics$min_roteiros <- min_roteiros
     out
@@ -584,40 +605,46 @@ surveyzones_assign_teams <- function(units,
 }
 
 #' @keywords internal
-.solve_op <- function(op, solver, max_time, rel_tol, verbose) {
-  params <- .solver_control_params(solver, max_time, rel_tol, verbose)
-  solver_name <- params$solver
-  params$solver <- NULL
-  sol <- ROI::ROI_solve(op, solver = solver_name, control = params)
+.classify_roi_solution <- function(sol) {
   msg <- tryCatch(sol$message, error = function(e) NULL)
   text <- paste(c(msg$status_message, msg$status, sol$status$msg$message), collapse = " ")
   symbol <- toupper(as.character(tryCatch(sol$status$msg$symbol, error = function(e) NULL))[1])
   if (length(symbol) != 1L || is.na(symbol)) symbol <- ""
   obj <- tryCatch(as.numeric(sol$objval), error = function(e) NA_real_)
-  has_full <- length(sol$solution) > 0L && length(obj) == 1L && is.finite(obj) && !anyNA(sol$solution)
+  if (length(obj) != 1L) obj <- NA_real_
+  has_full <- length(sol$solution) > 0L && is.finite(obj) && !anyNA(sol$solution)
   gap <- tryCatch(as.numeric(msg$info$mip_gap), error = function(e) NA_real_)
   if (length(gap) != 1L || !is.finite(gap)) gap <- NA_real_
-  infeasible_symbols <- c("INFEASIBLE", "UNBOUNDEDORINFEASIBLE", "INFEASIBLE_OR_UNBOUNDED")
+  code_ok <- isTRUE(sol$status$code == 0L)
+  infeasible_symbols <- c(
+    "INFEASIBLE", "UNBOUNDEDORINFEASIBLE", "INFEASIBLE_OR_UNBOUNDED", "GLP_NOFEAS", "GLP_INFEAS"
+  )
   if (symbol %in% infeasible_symbols) {
     status <- "infeasible"
     has_sol <- FALSE
-  } else if (nzchar(symbol)) {
+  } else if (symbol %in% c("OPTIMAL", "GLP_OPT") || (code_ok && has_full)) {
     has_sol <- has_full
-    status <- if (has_sol && symbol == "OPTIMAL") "optimal" else if (has_sol) "feasible" else "error"
+    status <- if (has_sol) "optimal" else "error"
   } else {
-    # unknown solver without a status symbol: fall back to message text
+    # other symbols (incumbent only) and unknown solvers: fall back to message text
     infeasible <- grepl("infeasible|no feasible", text, ignore.case = TRUE)
     has_sol <- has_full && !infeasible
-    status <- if (infeasible) {
-      "infeasible"
-    } else if (has_sol && isTRUE(sol$status$code == 0L)) {
-      "optimal"
-    } else if (has_sol) {
-      "feasible"
-    } else {
-      "error"
-    }
+    status <- if (infeasible) "infeasible" else if (has_sol) "feasible" else "error"
   }
+  list(status = status, has_sol = has_sol, obj = obj, gap = gap)
+}
+
+#' @keywords internal
+.solve_op <- function(op, solver, max_time, rel_tol, verbose) {
+  params <- .solver_control_params(solver, max_time, rel_tol, verbose)
+  solver_name <- params$solver
+  params$solver <- NULL
+  sol <- ROI::ROI_solve(op, solver = solver_name, control = params)
+  cls <- .classify_roi_solution(sol)
+  status <- cls$status
+  has_sol <- cls$has_sol
+  obj <- cls$obj
+  gap <- cls$gap
   list(
     status = status, objective_value = if (has_sol) obj else NA_real_,
     optimality_gap = gap, solution = if (has_sol) as.numeric(sol$solution) else NULL,

@@ -40,6 +40,14 @@ print.surveyzones_assignment <- function(x, ...) {
     return(invisible(x))
   }
   modes <- table(x$assignments$mode)
+  k_txt <- if (isTRUE(x$parameters$k_auto)) {
+    "{x$parameters$k} (auto; minimum {x$parameters$k_min})"
+  } else {
+    "{x$parameters$k}"
+  }
+  if (!is.null(x$parameters$k)) {
+    cli::cli_bullets(c("*" = paste0("k = ", k_txt)))
+  }
   cli::cli_bullets(c(
     "*" = "{nrow(x$assignments)} tract{?s} to {nrow(x$loads)} team{?s}: {sum(modes[c('roteiro')], na.rm = TRUE)} in roteiros, {sum(modes[c('loose')], na.rm = TRUE)} loose, {sum(modes[c('fixed')], na.rm = TRUE)} fixed",
     "*" = "Workload per team: {round(min(x$loads$workload), 1)} to {round(max(x$loads$workload), 1)} (band {round(x$loads$lower[1], 1)} to {round(x$loads$upper[1], 1)})",

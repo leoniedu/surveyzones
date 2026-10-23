@@ -1,3 +1,13 @@
+# surveyzones 0.0.0.9002
+
+* `surveyzones_assign_teams(k = "auto")` picks `k` from the minimum number of
+  roteiros (`k_min = ceiling(min_roteiros / n_teams)`, `k = max(k_min + 1,
+  ceiling(1.5 * k_min))`); `parameters` records `k`, `k_auto` and `k_min`.
+  Non-whole `k` is now rejected.
+* Solver status handling recognises glpk status symbols (`GLP_OPT`,
+  `GLP_NOFEAS`, `GLP_INFEAS`, ...), fixing optimal glpk solves being reported
+  as merely feasible.
+
 # surveyzones 0.0.0.9001
 
 * New `surveyzones_roteiro_candidates()` builds candidate walkable roteiros

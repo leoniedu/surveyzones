@@ -151,3 +151,56 @@ test_that("print shows the gap for feasible-but-not-optimal solves", {
   res$diagnostics$optimality_gap <- 0.034
   expect_match(paste(cli::cli_fmt(print(res)), collapse = "\n"), "3.4%")
 })
+
+mock_roi_solution <- function(symbol = NULL, code = 1L, solution = c(1, 0), objval = 3,
+                              message = NULL) {
+  list(
+    solution = solution, objval = objval,
+    status = list(code = code, msg = list(symbol = symbol, message = "")),
+    message = message
+  )
+}
+
+test_that("ROI status classification handles HiGHS and glpk symbols", {
+  cls <- function(...) .classify_roi_solution(mock_roi_solution(...))$status
+  expect_equal(cls("OPTIMAL", code = 0L), "optimal")
+  expect_equal(cls("GLP_OPT", code = 0L), "optimal")
+  expect_equal(cls(NULL, code = 0L), "optimal")
+  expect_equal(cls("TIME_LIMIT"), "feasible")
+  expect_equal(cls("GLP_FEAS"), "feasible")
+  for (s in c("INFEASIBLE", "UNBOUNDEDORINFEASIBLE", "GLP_NOFEAS", "GLP_INFEAS")) {
+    expect_equal(cls(s, solution = NULL, objval = NA_real_), "infeasible")
+  }
+  expect_equal(cls("GLP_UNDEF", solution = NULL, objval = NA_real_), "error")
+  expect_equal(cls("GLP_UNBND", solution = NULL, objval = NA_real_), "error")
+  expect_equal(cls("GLP_OPT", code = 0L, solution = NULL, objval = NA_real_), "error")
+  expect_equal(
+    cls("WEIRD", solution = NULL, objval = NA_real_, message = list(status = "problem is infeasible")),
+    "infeasible"
+  )
+})
+
+test_that("k = 'auto' follows the minimum-roteiros formula", {
+  skip_if_not_installed("ROI.plugin.highs")
+  x <- toy_instance()
+  res <- surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations,
+                                  mandatory = x$units$tract_id, k = "auto", tol = 1, solver = "highs")
+  k_min <- ceiling(res$diagnostics$min_roteiros / nrow(x$teams))
+  expect_true(res$parameters$k_auto)
+  expect_equal(res$parameters$k_min, k_min)
+  expect_equal(res$parameters$k, max(k_min + 1L, ceiling(1.5 * k_min)))
+  expect_message(print(res), "auto; minimum")
+})
+
+test_that("integer k is unchanged and non-whole k aborts", {
+  skip_if_not_installed("ROI.plugin.highs")
+  x <- toy_instance()
+  res <- surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations,
+                                  k = 2L, tol = 0.5, solver = "highs")
+  expect_equal(res$parameters$k, 2L)
+  expect_false(res$parameters$k_auto)
+  expect_error(
+    surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations, k = 2.5, solver = "highs"),
+    "whole number"
+  )
+})
