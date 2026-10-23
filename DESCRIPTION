@@ -33,7 +33,8 @@ Imports:
     slam,
     tibble,
     tidyr,
-    tools
+    tools,
+    utils
 Suggests:
     arrow,
     DBI,
