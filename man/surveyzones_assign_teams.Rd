@@ -19,7 +19,8 @@ surveyzones_assign_teams(
   solver = "glpk",
   max_time = 300,
   rel_tol = 0.01,
-  verbose = FALSE
+  verbose = FALSE,
+  use_cache = TRUE
 )
 }
 \arguments{
@@ -57,6 +58,12 @@ and \code{k_min} are stored in \code{parameters}.}
 \item{tol}{Non-negative load tolerance around the mean.}
 
 \item{solver, max_time, rel_tol, verbose}{Solver settings.}
+
+\item{use_cache}{Logical. If \code{TRUE} (default), the whole solve is memoised
+on disk (see \code{\link[=surveyzones_clear_cache]{surveyzones_clear_cache()}}), keyed on all inputs except
+\code{verbose}; points enter the key as plain coordinates and CRS. A cache hit
+returns the stored result, so \code{diagnostics$solve_time} is the time of the
+original solve, not of the lookup.}
 }
 \value{
 A \code{surveyzones_assignment} object with \code{assignments}, \code{roteiros},

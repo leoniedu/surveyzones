@@ -39,6 +39,11 @@
 #' @param radius_m,max_tracts See [surveyzones_roteiro_candidates()].
 #' @param tol Non-negative load tolerance around the mean.
 #' @param solver,max_time,rel_tol,verbose Solver settings.
+#' @param use_cache Logical. If `TRUE` (default), the whole solve is memoised
+#'   on disk (see [surveyzones_clear_cache()]), keyed on all inputs except
+#'   `verbose`; points enter the key as plain coordinates and CRS. A cache hit
+#'   returns the stored result, so `diagnostics$solve_time` is the time of the
+#'   original solve, not of the lookup.
 #'
 #' @return A `surveyzones_assignment` object with `assignments`, `roteiros`,
 #'   `loads`, `origins`, `parameters` and `diagnostics`. In `assignments`,
@@ -64,14 +69,17 @@ surveyzones_assign_teams <- function(units,
                                      solver = "glpk",
                                      max_time = 300,
                                      rel_tol = 0.01,
-                                     verbose = FALSE) {
-  start_time <- proc.time()[["elapsed"]]
+                                     verbose = FALSE,
+                                     use_cache = TRUE) {
   validate_tracts(units)
   validate_solver(solver)
   if (!inherits(points, "sf") || !all(c("tract_id", "point_id") %in% names(points))) {
     cli::cli_abort(
       "{.arg points} must be an sf object with {.field tract_id} and {.field point_id} columns."
     )
+  }
+  if (!all(as.character(sf::st_geometry_type(points)) == "POINT")) {
+    cli::cli_abort("{.arg points} must contain only POINT geometries.")
   }
   k_auto <- identical(k, "auto")
   if (!k_auto && (!is.numeric(k) || length(k) != 1L || is.na(k) || k < 1 || k != round(k))) {
@@ -80,6 +88,52 @@ surveyzones_assign_teams <- function(units,
   if (!is.numeric(tol) || length(tol) != 1L || is.na(tol) || tol < 0) {
     cli::cli_abort("{.arg tol} must be a single number >= 0.")
   }
+  points_df <- tibble::tibble(
+    tract_id = as.character(points$tract_id),
+    point_id = as.character(points$point_id),
+    lon = unname(sf::st_coordinates(points)[, 1]),
+    lat = unname(sf::st_coordinates(points)[, 2])
+  )
+  crs <- sf::st_crs(points)
+  core_args <- list(
+    units = units, points_df = points_df, crs = crs, teams = teams,
+    eligible = eligible, durations = durations, mandatory = mandatory,
+    fixed = fixed, k = k, radius_m = radius_m, tol = tol,
+    max_tracts = max_tracts, solver = solver, max_time = max_time,
+    rel_tol = rel_tol, verbose = verbose
+  )
+  if (use_cache) {
+    is_cached <- do.call(memoise::has_cache(.assign_teams_core_mem), core_args)
+    if (is_cached) {
+      cli::cli_alert_success("Using cached assignment.")
+    } else {
+      cli::cli_alert_info("Computing and caching assignment.")
+    }
+    return(do.call(.assign_teams_core_mem, core_args))
+  }
+  do.call(.assign_teams_core, core_args)
+}
+
+#' @keywords internal
+.assign_teams_core <- function(units,
+                               points_df,
+                               crs,
+                               teams,
+                               eligible,
+                               durations,
+                               mandatory,
+                               fixed,
+                               k,
+                               radius_m,
+                               tol,
+                               max_tracts,
+                               solver,
+                               max_time,
+                               rel_tol,
+                               verbose) {
+  start_time <- proc.time()[["elapsed"]]
+  points <- sf::st_as_sf(points_df, coords = c("lon", "lat"), crs = crs)
+  k_auto <- identical(k, "auto")
   need <- list(
     teams = c("team_id"), eligible = c("tract_id", "team_id"),
     durations = c("origin_id", "destination_id", "distance")

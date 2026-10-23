@@ -11,6 +11,7 @@ utils::globalVariables(c(
   "xend", "yend",
   "data",  # tidyr::nest() creates this variable
   "surveyzones_build_zones_single_mem",  # memoised version created in .onLoad
+  ".assign_teams_core_mem",  # memoised version created in .onLoad
   ".data", ".tract", "result", "zone_score", "zone_order",
   "reorder"
 ))
@@ -38,5 +39,15 @@ utils::globalVariables(c(
   surveyzones_build_zones_single_mem <<- memoise::memoise(
     surveyzones_build_zones_single,
     cache = cachem::cache_disk(dir = cache_dir)
+  )
+
+  assign_dir <- file.path(tools::R_user_dir("surveyzones", which = "cache"), "assign_teams")
+  dir.create(assign_dir, showWarnings = FALSE, recursive = TRUE)
+  .pkg$assign_cache_dir <- assign_dir
+
+  .assign_teams_core_mem <<- memoise::memoise(
+    .assign_teams_core,
+    omit_args = "verbose",
+    cache = cachem::cache_disk(dir = assign_dir)
   )
 }

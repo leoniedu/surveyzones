@@ -1,3 +1,11 @@
+# surveyzones 0.0.0.9003
+
+* `surveyzones_assign_teams(use_cache = TRUE)` memoises the whole solve on disk
+  (separate `assign_teams` cache dir, `verbose` not in the key). On a hit,
+  `diagnostics$solve_time` is that of the original solve.
+  `surveyzones_clear_cache()` clears it and now keeps the cache directories
+  (removing them broke later memoised calls in the same session).
+
 # surveyzones 0.0.0.9002
 
 * `surveyzones_assign_teams(k = "auto")` picks `k` from the minimum number of

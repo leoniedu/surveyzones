@@ -204,3 +204,58 @@ test_that("integer k is unchanged and non-whole k aborts", {
     "whole number"
   )
 })
+
+local_assign_cache <- function(env = parent.frame()) {
+  tmp <- withr::local_tempdir(.local_envir = env)
+  other <- withr::local_tempdir(.local_envir = env)
+  # .onLoad assigns the memoised function with `<<-`, which lands in globalenv
+  old_mem <- get(".assign_teams_core_mem", envir = globalenv())
+  assign(".assign_teams_core_mem", memoise::memoise(
+    surveyzones:::.assign_teams_core,
+    omit_args = "verbose",
+    cache = cachem::cache_disk(dir = tmp)
+  ), envir = globalenv())
+  pkg <- surveyzones:::.pkg
+  old <- as.list(pkg)[c("cache_dir", "assign_cache_dir")]
+  pkg$cache_dir <- other
+  pkg$assign_cache_dir <- tmp
+  withr::defer({
+    assign(".assign_teams_core_mem", old_mem, envir = globalenv())
+    pkg$cache_dir <- old$cache_dir
+    pkg$assign_cache_dir <- old$assign_cache_dir
+  }, envir = env)
+  tmp
+}
+
+test_that("use_cache: repeat call hits, changed input misses, use_cache = FALSE bypasses", {
+  skip_if_not_installed("ROI.plugin.highs")
+  local_assign_cache()
+  x <- toy_instance()
+  run <- function(...) {
+    surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations,
+                             k = 2L, solver = "highs", ...)
+  }
+  expect_message(r1 <- run(tol = 0.5), "Computing and caching")
+  expect_message(r2 <- run(tol = 0.5), "Using cached")
+  expect_identical(r1, r2)
+  expect_message(r3 <- run(tol = 0.5, verbose = TRUE), "Using cached")
+  expect_message(run(tol = 0.4), "Computing and caching")
+  expect_no_message(r4 <- run(tol = 0.5, use_cache = FALSE), message = "cached")
+  expect_equal(r4$assignments, r1$assignments)
+  expect_equal(r4$diagnostics$objective_value, r1$diagnostics$objective_value)
+})
+
+test_that("surveyzones_clear_cache(force = TRUE) clears the assign_teams cache", {
+  skip_if_not_installed("ROI.plugin.highs")
+  tmp <- local_assign_cache()
+  x <- toy_instance()
+  run <- function() {
+    surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations,
+                             k = 2L, tol = 0.5, solver = "highs")
+  }
+  suppressMessages(run())
+  expect_gt(length(list.files(tmp)), 0L)
+  suppressMessages(surveyzones_clear_cache(force = TRUE))
+  expect_length(list.files(tmp, recursive = TRUE), 0L)
+  expect_message(run(), "Computing and caching")
+})

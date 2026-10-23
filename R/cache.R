@@ -1,7 +1,7 @@
 #' Clear the surveyzones disk cache
 #'
-#' Removes all cached results stored by [surveyzones_build_zones()]
-#' and the Google Routes API engine ([surveyzones_engine_google()]).
+#' Removes all cached results stored by [surveyzones_build_zones()],
+#' [surveyzones_assign_teams()] and the Google Routes API engine ([surveyzones_engine_google()]).
 #' Use this when inputs have changed structurally (e.g. different distance
 #' engine or tract data) and you want to force a clean recompute.
 #'
@@ -12,13 +12,14 @@
 #'
 #' @export
 surveyzones_clear_cache <- function(force = FALSE) {
-  cache_dir <- .pkg$cache_dir
-  if (!dir.exists(cache_dir)) {
+  cache_dirs <- c(.pkg$cache_dir, .pkg$assign_cache_dir)
+  cache_dirs <- cache_dirs[dir.exists(cache_dirs)]
+  if (length(cache_dirs) == 0L) {
     cli::cli_alert_info("Cache directory not found \u2014 nothing to clear.")
     return(invisible(FALSE))
   }
 
-  files <- list.files(cache_dir, recursive = TRUE, full.names = TRUE)
+  files <- list.files(cache_dirs, recursive = TRUE, full.names = TRUE)
   size  <- format(
     structure(sum(file.size(files)), class = "object_size"),
     units = "auto"
@@ -35,7 +36,9 @@ surveyzones_clear_cache <- function(force = FALSE) {
   }
 
   memoise::forget(surveyzones_build_zones_single_mem)
-  unlink(cache_dir, recursive = TRUE)
+  memoise::forget(.assign_teams_core_mem)
+  # keep the directories: cachem treats a missing directory as a destroyed cache
+  unlink(list.files(cache_dirs, full.names = TRUE, all.files = TRUE, no.. = TRUE), recursive = TRUE)
   cli::cli_alert_success("Cache cleared ({size} freed).")
   invisible(TRUE)
 }
