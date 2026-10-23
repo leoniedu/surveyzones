@@ -13,6 +13,10 @@ utils::globalVariables(c("lam", "s", "z", "a", "w", "y", "p", "q", "c", "i", "m"
 #' (fixed included) divided by the number of teams, and each team gets at most
 #' `k` roteiros.
 #'
+#' A tract in both `mandatory` and `fixed` is treated as fixed.
+#' `diagnostics$solve_time` is the total wall time in seconds, including
+#' candidate generation and model building.
+#'
 #' @param units A data frame with `tract_id` and `expected_service_time` (load,
 #'   e.g. households); validated with the same rules as tract tables.
 #' @param points An sf object of household POINT geometries with `tract_id`
@@ -223,14 +227,12 @@ surveyzones_assign_teams <- function(units,
     fx <- match(fixed_ids[fixed_team == team_ids[d]], ids)
     sort(unique(c(in_r, fx)))
   })
-  w_q <- integer()
-  w_v <- integer()
-  for (q in seq_len(nsq)) {
+  w_list <- lapply(seq_len(nsq), \(q) {
     v <- setdiff(anchors[[sq_d[q]]], sq_u[q])
-    v <- v[!is.na(dmat[cbind(v, sq_u[q])])]
-    w_q <- c(w_q, rep(q, length(v)))
-    w_v <- c(w_v, v)
-  }
+    v[!is.na(dmat[cbind(v, rep(sq_u[q], length(v)))])]
+  })
+  w_q <- rep(seq_len(nsq), lengths(w_list))
+  w_v <- as.integer(unlist(w_list))
   nwq <- length(w_q)
   w_cost <- dmat[cbind(w_v, sq_u[w_q])]
   w_d <- sq_d[w_q]
@@ -260,101 +262,78 @@ surveyzones_assign_teams <- function(units,
     return(finish_empty("infeasible"))
   }
 
-  n1 <- \(n) n + 1L
-  model <- ompr::MILPModel() |>
-    ompr::add_variable(lam[p], p = seq_len(n1(np)), type = "binary") |>
-    ompr::add_variable(s[q], q = seq_len(n1(nsq)), type = "binary") |>
-    ompr::add_variable(z[c], c = seq_len(nu * nd), type = "binary") |>
-    ompr::add_variable(a[i], i = seq_len(n1(naq)), type = "continuous", lb = 0) |>
-    ompr::add_variable(w[m], m = seq_len(n1(nwq)), type = "continuous", lb = 0) |>
-    ompr::add_variable(y[g], g = seq_len(n1(ny)), type = "continuous", lb = 0) |>
-    ompr::add_constraint(lam[p] <= 0, p = np + 1L) |>
-    ompr::add_constraint(s[q] <= 0, q = nsq + 1L) |>
-    ompr::add_constraint(a[i] <= 0, i = naq + 1L) |>
-    ompr::add_constraint(w[m] <= 0, m = nwq + 1L) |>
-    ompr::add_constraint(y[g] <= 0, g = ny + 1L) |>
-    ompr::set_objective(
-      ompr::sum_over(a_cost[i] * a[i], i = seq_len(naq)) +
-        ompr::sum_over(w_cost[m] * w[m], m = seq_len(nwq)),
-      sense = "min"
-    )
+  # variable layout: lam | s | z | a | w | y
+  o_lam <- 0L
+  o_s <- np
+  o_z <- o_s + nsq
+  o_a <- o_z + nu * nd
+  o_w <- o_a + naq
+  o_y <- o_w + nwq
+  nvar <- o_y + ny
+  cost <- c(rep(0, o_a), a_cost, w_cost, rep(0, ny))
+  types <- c(rep("B", o_a), rep("C", naq + nwq + ny))
 
-  # z index of (tract c, team d) = (d - 1) * nu + c
-  if (naq > 0L) {
-    model <- model |>
-      ompr::add_constraint(a[i] <= z[(pd[a_p[i]] - 1L) * nu + a_c[i]], i = seq_len(naq))
-  }
-  for (p in seq_len(np)) {
-    model <- model |>
-      ompr::add_constraint(ompr::sum_over(a[i], i = which(a_p == p)) == lam[p])
-  }
-  for (d in seq_len(nd)) {
-    model <- model |>
-      ompr::add_constraint(ompr::sum_over(z[c], c = (d - 1L) * nu + seq_len(nu)) == 1) |>
-      ompr::add_constraint(ompr::sum_over(lam[p], p = ps_by_d[[d]]) <= k)
-    if (length(ps_by_d[[d]]) + length(sq_by_d[[d]]) > 0L) {
-      model <- model |>
-        ompr::add_constraint(
-          ompr::sum_over(pW[p] * lam[p], p = ps_by_d[[d]]) +
-            ompr::sum_over(s_load[q] * s[q], q = sq_by_d[[d]]) >= lower - fixed_load[d]
-        ) |>
-        ompr::add_constraint(
-          ompr::sum_over(pW[p] * lam[p], p = ps_by_d[[d]]) +
-            ompr::sum_over(s_load[q] * s[q], q = sq_by_d[[d]]) <= upper - fixed_load[d]
-        )
-    }
-  }
-  for (u in match(free_ids, ids)) {
-    model <- model |>
-      ompr::add_constraint(
-        ompr::sum_over(lam[mem_p[m]], m = which(mem_t == u)) +
-          ompr::sum_over(s[q], q = which(sq_u == u)) == 1
-      )
-  }
-  if (nwq > 0L) {
-    nonfix <- which(!w_fixed)
-    model <- model |>
-      ompr::add_constraint(w[m] <= s[w_q[m]], m = seq_len(nwq))
-    if (length(nonfix) > 0L) {
-      model <- model |>
-        ompr::add_constraint(w[nonfix[j]] <= y[w_y[j]], j = seq_along(nonfix))
-    }
-  }
-  for (g in seq_len(ny)) {
-    ps <- which(pd[mem_p] == y_key[g, 2] & mem_t == y_key[g, 1])
-    model <- model |>
-      ompr::add_constraint(y[g] == ompr::sum_over(lam[mem_p[m]], m = ps))
-  }
-  for (q in seq_len(nsq)) {
-    model <- model |>
-      ompr::add_constraint(ompr::sum_over(w[m], m = which(w_q == q)) == s[q])
-  }
-
-  solved <- .solve_model_with_status(
-    model = model, solver = solver, max_time = max_time, rel_tol = rel_tol, verbose = verbose
+  rows <- .new_row_builder()
+  seq_a <- seq_len(naq)
+  # a <= z (origin) and a <= lam (valid inequality)
+  rows$add(rep(seq_a, 2), c(o_a + seq_a, o_z + (pd[a_p] - 1L) * nu + a_c), rep(c(1, -1), each = naq), naq, "<=", 0)
+  rows$add(rep(seq_a, 2), c(o_a + seq_a, o_lam + a_p), rep(c(1, -1), each = naq), naq, "<=", 0)
+  # sum_c a[r,c,d] = lam[r,d]
+  rows$add(c(a_p, seq_len(np)), c(o_a + seq_a, o_lam + seq_len(np)), c(rep(1, naq), rep(-1, np)), np, "==", 0)
+  # one origin per team; at most k roteiros per team
+  rows$add(
+    rep(seq_len(nd), each = nu), o_z + seq_len(nu * nd), rep(1, nu * nd), nd, "==", 1
   )
+  rows$add(pd, o_lam + seq_len(np), rep(1, np), nd, "<=", k)
+  # load band
+  for (d in seq_len(nd)) {
+    if (length(ps_by_d[[d]]) + length(sq_by_d[[d]]) > 0L) {
+      cols <- c(o_lam + ps_by_d[[d]], o_s + sq_by_d[[d]])
+      vals <- c(pW[ps_by_d[[d]]], s_load[sq_by_d[[d]]])
+      rows$add(rep(1L, length(cols)), cols, vals, 1L, ">=", lower - fixed_load[d])
+      rows$add(rep(1L, length(cols)), cols, vals, 1L, "<=", upper - fixed_load[d])
+    }
+  }
+  # coverage of free tracts
+  free_idx <- match(free_ids, ids)
+  nf <- length(free_idx)
+  mi <- match(mem_t, free_idx)
+  si <- match(sq_u, free_idx)
+  rows$add(
+    c(mi, si), c(o_lam + mem_p, o_s + seq_len(nsq)), rep(1, length(mi) + nsq), nf, "==", 1
+  )
+  # loose tracts hang off one anchor
+  seq_w <- seq_len(nwq)
+  rows$add(rep(seq_w, 2), c(o_w + seq_w, o_s + w_q), rep(c(1, -1), each = nwq), nwq, "<=", 0)
+  nonfix <- which(!w_fixed)
+  rows$add(
+    rep(seq_along(nonfix), 2), c(o_w + nonfix, o_y + w_y), rep(c(1, -1), each = length(nonfix)),
+    length(nonfix), "<=", 0
+  )
+  gi <- match(paste(mem_t, pd[mem_p]), paste(y_key[, 1], y_key[, 2]))
+  hit <- which(!is.na(gi))
+  rows$add(
+    c(seq_len(ny), gi[hit]), c(o_y + seq_len(ny), o_lam + mem_p[hit]),
+    c(rep(1, ny), rep(-1, length(hit))), ny, "==", 0
+  )
+  rows$add(
+    c(w_q, seq_len(nsq)), c(o_w + seq_w, o_s + seq_len(nsq)),
+    c(rep(1, nwq), rep(-1, nsq)), nsq, "==", 0
+  )
+  op <- rows$op(cost, types, nvar)
+
+  solved <- .solve_op(op, solver = solver, max_time = max_time, rel_tol = rel_tol, verbose = verbose)
   if (!.is_solution_status(solved$status)) {
-    msg <- tryCatch(
-      solved$result$additional_solver_output$ROI$message$status_message,
-      error = function(e) NULL
-    )
-    status <- if (solved$status == "error" && is.character(msg) &&
-      any(grepl("infeasible", msg, ignore.case = TRUE))) "infeasible" else solved$status
-    out <- finish_empty(status)
+    out <- finish_empty(solved$status)
     out$diagnostics$optimality_gap <- solved$optimality_gap
     return(out)
   }
-  res <- solved$result
-  fill <- function(sol, n) {
-    out <- numeric(n)
-    out[sol[[2]]] <- sol$value
-    out
-  }
-  lam_v <- fill(ompr::get_solution(res, lam[p]), np + 1L)[seq_len(np)]
-  s_v <- fill(ompr::get_solution(res, s[q]), nsq + 1L)[seq_len(nsq)]
-  z_v <- fill(ompr::get_solution(res, z[c]), nu * nd)
-  w_v_sol <- fill(ompr::get_solution(res, w[m]), nwq + 1L)[seq_len(nwq)]
-  .extract_assignment(
+  sol <- solved$solution
+  lam_v <- sol[o_lam + seq_len(np)]
+  s_v <- sol[o_s + seq_len(nsq)]
+  z_v <- sol[o_z + seq_len(nu * nd)]
+  w_v_sol <- sol[o_w + seq_len(nwq)]
+  out <- .extract_assignment(
     solved = solved, start_time = start_time, parameters = parameters,
     cand = cand, ids = ids, team_ids = team_ids, load = load, dmat = dmat,
     pr = pr, pd = pd, sq_u = sq_u, sq_d = sq_d, w_q = w_q, w_v = w_v, w_cost = w_cost,
@@ -362,6 +341,17 @@ surveyzones_assign_teams <- function(units,
     fixed = fixed, fixed_load = fixed_load, lower = lower, upper = upper,
     warnings = cand_warnings
   )
+  bad_cover <- !identical(sort(out$assignments$tract_id), sort(ids))
+  bad_band <- any(out$loads$workload < lower - 1e-6 | out$loads$workload > upper + 1e-6)
+  if (bad_cover || bad_band) {
+    cli::cli_warn(
+      "Solver solution failed verification ({if (bad_cover) 'coverage' else 'load band'}); returning status {.val error}."
+    )
+    bad <- finish_empty("error")
+    bad$diagnostics$optimality_gap <- solved$optimality_gap
+    return(bad)
+  }
+  out
 }
 
 #' @keywords internal
@@ -446,5 +436,68 @@ surveyzones_assign_teams <- function(units,
     roteiro_id = character(), team_id = character(), center_point_id = character(),
     center_tract_id = character(), n_tracts = integer(), workload = numeric(),
     span_m = numeric(), cost = numeric()
+  )
+}
+
+#' @keywords internal
+.new_row_builder <- function() {
+  st <- new.env(parent = emptyenv())
+  st$i <- list()
+  st$j <- list()
+  st$v <- list()
+  st$dir <- list()
+  st$rhs <- list()
+  st$n <- 0L
+  list(
+    add = function(i, j, v, nrow, dir, rhs) {
+      if (nrow == 0L) return(invisible())
+      st$i[[length(st$i) + 1L]] <- as.integer(i) + st$n
+      st$j[[length(st$j) + 1L]] <- as.integer(j)
+      st$v[[length(st$v) + 1L]] <- as.numeric(v)
+      st$dir[[length(st$dir) + 1L]] <- rep(dir, nrow)
+      st$rhs[[length(st$rhs) + 1L]] <- rep(as.numeric(rhs), length.out = nrow)
+      st$n <- st$n + as.integer(nrow)
+      invisible()
+    },
+    op = function(cost, types, nvar) {
+      L <- slam::simple_triplet_matrix(
+        i = unlist(st$i), j = unlist(st$j), v = unlist(st$v),
+        nrow = st$n, ncol = nvar
+      )
+      ROI::OP(
+        objective = ROI::L_objective(cost),
+        constraints = ROI::L_constraint(L, dir = unlist(st$dir), rhs = unlist(st$rhs)),
+        types = types, maximum = FALSE
+      )
+    }
+  )
+}
+
+#' @keywords internal
+.solve_op <- function(op, solver, max_time, rel_tol, verbose) {
+  params <- .solver_control_params(solver, max_time, rel_tol, verbose)
+  solver_name <- params$solver
+  params$solver <- NULL
+  sol <- ROI::ROI_solve(op, solver = solver_name, control = params)
+  msg <- tryCatch(sol$message, error = function(e) NULL)
+  text <- paste(c(msg$status_message, msg$status, sol$status$msg$message, sol$status$msg$code), collapse = " ")
+  obj <- tryCatch(as.numeric(sol$objval), error = function(e) NA_real_)
+  has_sol <- length(sol$solution) > 0L && is.finite(obj) && !anyNA(sol$solution) &&
+    !isTRUE(grepl("infeasible", text, ignore.case = TRUE))
+  gap <- tryCatch(as.numeric(msg$info$mip_gap), error = function(e) NA_real_)
+  if (length(gap) != 1L || !is.finite(gap)) gap <- NA_real_
+  status <- if (grepl("infeasible", text, ignore.case = TRUE)) {
+    "infeasible"
+  } else if (has_sol && sol$status$code == 0L) {
+    "optimal"
+  } else if (has_sol) {
+    "feasible"
+  } else {
+    "error"
+  }
+  list(
+    status = status, objective_value = if (has_sol) obj else NA_real_,
+    optimality_gap = gap, solution = if (has_sol) as.numeric(sol$solution) else NULL,
+    raw = sol
   )
 }

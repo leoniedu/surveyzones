@@ -69,3 +69,8 @@ centres plus from anchors to loose tracts. Every team's load must lie in
 (fixed included) divided by the number of teams, and each team gets at most
 \code{k} roteiros.
 }
+\details{
+A tract in both \code{mandatory} and \code{fixed} is treated as fixed.
+\code{diagnostics$solve_time} is the total wall time in seconds, including
+candidate generation and model building.
+}

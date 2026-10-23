@@ -34,10 +34,12 @@ test_that("optimal on a tiny instance (brute force)", {
 test_that("asymmetric durations are used origin -> centre", {
   skip_if_not_installed("ROI.plugin.highs")
   x <- toy_instance()
-  res <- surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations, tol = 0.5, solver = "highs")
+  res <- surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations,
+                                  mandatory = x$units$tract_id, k = 3L, max_tracts = 1L, tol = 1, solver = "highs")
   r <- dplyr::left_join(res$roteiros, res$origins, by = dplyr::join_by(team_id))
   d <- dplyr::left_join(r, x$durations, by = dplyr::join_by(origin_tract_id == origin_id, center_tract_id == destination_id))
   expect_equal(r$cost, dplyr::coalesce(d$distance, 0))
+  expect_true(any(r$cost > 0))
 })
 
 test_that("same inputs give the same assignment", {
@@ -85,5 +87,10 @@ test_that("objective equals roteiro plus loose costs and loose tracts have ancho
   )
   loose <- dplyr::filter(res$assignments, mode == "loose")
   expect_gt(nrow(loose), 0L)
-  expect_true(all(loose$team_id %in% res$roteiros$team_id))
+  for (i in seq_len(nrow(loose))) {
+    anchors <- res$assignments$tract_id[res$assignments$team_id == loose$team_id[i] & res$assignments$mode != "loose"]
+    dur <- dplyr::filter(x$durations, destination_id == loose$tract_id[i], origin_id %in% anchors)
+    expect_true(nrow(dur) > 0L)
+    expect_equal(loose$cost[i], min(dur$distance), tolerance = 1e-6)
+  }
 })

@@ -30,6 +30,7 @@ Imports:
     ROI,
     seriation,
     sf,
+    slam,
     tibble,
     tidyr,
     tools
