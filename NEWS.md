@@ -5,6 +5,8 @@
   `diagnostics$solve_time` is that of the original solve.
   `surveyzones_clear_cache()` clears it and now keeps the cache directories
   (removing them broke later memoised calls in the same session).
+  After upgrading surveyzones, run `surveyzones_clear_cache()`: cache keys do
+  not include helper code.
 
 # surveyzones 0.0.0.9002
 
