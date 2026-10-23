@@ -45,10 +45,12 @@ tracts stay with that team (and count toward its load).}
 \item{k}{Maximum number of roteiros per team: a whole number >= 1, or
 \code{"auto"}. With \code{"auto"}, \code{k_min = ceiling(min_roteiros / n_teams)} is
 computed from the minimum number of roteiros that partition the mandatory
-tracts (\code{diagnostics$min_roteiros}) and \code{k = max(k_min + 1, ceiling(1.5 * k_min))}. \code{k_min} is only a lower bound: team eligibility can require
-more roteiros per team, in which case the model is infeasible and the
-elastic diagnosis reports the \code{k} rule. The \code{k} used, \code{k_auto} and \code{k_min}
-are stored in \code{parameters}.}
+tracts (\code{diagnostics$min_roteiros}) and \code{k = k_min + 2}. \code{k_min} is only a
+lower bound: team eligibility can require more roteiros per team, in which
+case the model is infeasible and the elastic diagnosis reports the \code{k}
+rule. When the minimum-roteiros cover stops at the time limit, its count is
+an upper bound, so \code{k_min} may be over-estimated. The \code{k} used, \code{k_auto}
+and \code{k_min} are stored in \code{parameters}.}
 
 \item{radius_m, max_tracts}{See \code{\link[=surveyzones_roteiro_candidates]{surveyzones_roteiro_candidates()}}.}
 

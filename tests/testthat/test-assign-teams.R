@@ -188,7 +188,7 @@ test_that("k = 'auto' follows the minimum-roteiros formula", {
   k_min <- ceiling(res$diagnostics$min_roteiros / nrow(x$teams))
   expect_true(res$parameters$k_auto)
   expect_equal(res$parameters$k_min, k_min)
-  expect_equal(res$parameters$k, max(k_min + 1L, ceiling(1.5 * k_min)))
+  expect_equal(res$parameters$k, k_min + 2L)
   expect_message(print(res), "auto; minimum")
 })
 
