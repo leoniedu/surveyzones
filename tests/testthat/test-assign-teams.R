@@ -314,6 +314,26 @@ test_that("two origins per team use the closer one", {
   expect_equal(res$roteiros$cost, .origin_cost(x, res, og))
 })
 
+test_that("origins outside units use their own durations", {
+  skip_if_not_installed("ROI.plugin.highs")
+  x <- toy_instance()
+  casa <- tibble::tibble(
+    origin_id = "casa1", destination_id = x$units$tract_id,
+    distance = c(9, 9, 9, 9, 9, 0.25)
+  )
+  x$durations <- dplyr::bind_rows(x$durations, casa)
+  og <- tibble::tibble(team_id = "t1", tract_id = "casa1")
+  res <- surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations,
+                                  mandatory = x$units$tract_id, origins = og, k = 3L, max_tracts = 1L,
+                                  tol = 1, solver = "highs", use_cache = FALSE)
+  r1 <- res$roteiros[res$roteiros$team_id == "t1", ]
+  esperado <- casa$distance[match(r1$center_tract_id, casa$destination_id)]
+  expect_equal(r1$cost, esperado)
+  expect_equal(res$origins$origin_tract_id[res$origins$team_id == "t1"], "casa1")
+  expect_equal(res$diagnostics$objective_value,
+               sum(res$roteiros$cost) + sum(res$loads$loose_cost), tolerance = 1e-6)
+})
+
 test_that("optimal with given origins (brute force)", {
   skip_if_not_installed("ROI.plugin.highs")
   x <- toy_instance(n = 4)

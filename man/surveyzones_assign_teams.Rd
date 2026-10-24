@@ -45,11 +45,13 @@ zero.}
 tracts stay with that team (and count toward its load).}
 
 \item{origins}{\code{NULL} or a data frame with \code{team_id} and \code{tract_id}, one or
-more rows per team (e.g. each dupla member's home base snapped to a tract).
+more rows per team. \code{tract_id} is either a unit (e.g. a home base snapped
+to a tract) or any other point present as \code{origin_id} in \code{durations}
+(e.g. the home base itself, with its own travel times to the units).
 A listed team has a given origin: the model does not choose one, and the
-cost of each of its roteiros is the minimum over its origin tracts of the
-directed duration to the roteiro centre (0 when origin and centre
-coincide). Pairs missing from \code{durations} are skipped; a roteiro with no
+cost of each of its roteiros is the minimum over its origins of the
+directed duration to the roteiro centre (0 when a unit origin is the
+centre). Pairs missing from \code{durations} are skipped; a roteiro with no
 usable origin is not offered to that team. Unlisted teams keep the
 model-chosen origin. The cost of loose tracts is unchanged.}
 

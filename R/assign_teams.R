@@ -29,11 +29,13 @@
 #' @param fixed `NULL` or a data frame with `tract_id` and `team_id`; these
 #'   tracts stay with that team (and count toward its load).
 #' @param origins `NULL` or a data frame with `team_id` and `tract_id`, one or
-#'   more rows per team (e.g. each dupla member's home base snapped to a tract).
+#'   more rows per team. `tract_id` is either a unit (e.g. a home base snapped
+#'   to a tract) or any other point present as `origin_id` in `durations`
+#'   (e.g. the home base itself, with its own travel times to the units).
 #'   A listed team has a given origin: the model does not choose one, and the
-#'   cost of each of its roteiros is the minimum over its origin tracts of the
-#'   directed duration to the roteiro centre (0 when origin and centre
-#'   coincide). Pairs missing from `durations` are skipped; a roteiro with no
+#'   cost of each of its roteiros is the minimum over its origins of the
+#'   directed duration to the roteiro centre (0 when a unit origin is the
+#'   centre). Pairs missing from `durations` are skipped; a roteiro with no
 #'   usable origin is not offered to that team. Unlisted teams keep the
 #'   model-chosen origin. The cost of loose tracts is unchanged.
 #' @param k Maximum number of roteiros per team: a whole number >= 1, or
@@ -221,13 +223,9 @@ surveyzones_assign_teams <- function(units,
   if (length(bad) > 0L) {
     cli::cli_abort("{.arg origins} has unknown teams: {.val {bad}}.")
   }
-  bad <- setdiff(origins$tract_id, ids)
+  bad <- setdiff(setdiff(origins$tract_id, ids), as.character(durations$origin_id))
   if (length(bad) > 0L) {
-    cli::cli_abort("{.arg origins} has unknown tracts: {.val {bad}}.")
-  }
-  bad <- setdiff(origins$tract_id, seen_dur)
-  if (length(bad) > 0L) {
-    cli::cli_abort("{.arg origins} has tracts missing from {.arg durations}: {.val {bad}}.")
+    cli::cli_abort("{.arg origins} has origins that are neither units nor origins in {.arg durations}: {.val {bad}}.")
   }
   pt_unknown <- setdiff(unique(as.character(points$tract_id)), ids)
   if (length(pt_unknown) > 0L) {
@@ -240,6 +238,14 @@ surveyzones_assign_teams <- function(units,
     as.character(durations$destination_id) %in% ids, ]
   dmat[cbind(as.character(dd$origin_id), as.character(dd$destination_id))] <- as.numeric(dd$distance)
   diag(dmat) <- 0
+  # given origins (units or outside points such as home bases) to units
+  o_ids <- unique(origins$tract_id)
+  omat <- matrix(NA_real_, length(o_ids), nu, dimnames = list(o_ids, ids))
+  od <- durations[as.character(durations$origin_id) %in% o_ids &
+    as.character(durations$destination_id) %in% ids, ]
+  omat[cbind(as.character(od$origin_id), as.character(od$destination_id))] <- as.numeric(od$distance)
+  em_ids <- intersect(o_ids, ids)
+  omat[cbind(em_ids, em_ids)] <- 0
 
   fixed_ids <- fixed$tract_id
   free_ids <- setdiff(ids, fixed_ids)
@@ -315,7 +321,7 @@ surveyzones_assign_teams <- function(units,
   pr <- pr[ord]
   pd <- pd[ord]
   r_center <- match(cand$center_tract_id, ids)
-  given_idx <- lapply(team_ids, \(d) match(origins$tract_id[origins$team_id == d], ids))
+  given_idx <- lapply(team_ids, \(d) match(origins$tract_id[origins$team_id == d], o_ids))
   is_given <- lengths(given_idx) > 0L
   model_d <- which(!is_given)
   nmd <- length(model_d)
@@ -323,7 +329,7 @@ surveyzones_assign_teams <- function(units,
   for (d in which(is_given)) {
     sel <- which(pd == d)
     pair_cost[sel] <- vapply(sel, \(p) {
-      v <- dmat[given_idx[[d]], r_center[pr[p]]]
+      v <- omat[given_idx[[d]], r_center[pr[p]]]
       if (all(is.na(v))) NA_real_ else min(v, na.rm = TRUE)
     }, numeric(1))
   }
@@ -513,7 +519,7 @@ surveyzones_assign_teams <- function(units,
         pr = pr, pd = pd, sq_u = sq_u, sq_d = sq_d, w_q = w_q, w_v = w_v, w_cost = w_cost,
         lam_v = sol[o_lam + seq_len(np)], s_v = sol[o_s + seq_len(nsq)],
         z_v = sol[o_z + seq_len(nu * nmd)], w_sol = sol[o_w + seq_len(nwq)],
-        model_d = model_d, given_idx = given_idx,
+        model_d = model_d, given_idx = given_idx, omat = omat,
         fixed = fixed, fixed_load = fixed_load, lower = lower, upper = upper,
         warnings = cand_warnings
       )
@@ -529,7 +535,7 @@ surveyzones_assign_teams <- function(units,
     cand = cand, ids = ids, team_ids = team_ids, load = load, dmat = dmat,
     pr = pr, pd = pd, sq_u = sq_u, sq_d = sq_d, w_q = w_q, w_v = w_v, w_cost = w_cost,
     lam_v = lam_v, s_v = s_v, z_v = z_v, w_sol = w_v_sol,
-    model_d = model_d, given_idx = given_idx,
+    model_d = model_d, given_idx = given_idx, omat = omat,
     fixed = fixed, fixed_load = fixed_load, lower = lower, upper = upper,
     warnings = cand_warnings
   )
@@ -605,17 +611,21 @@ surveyzones_assign_teams <- function(units,
 #' @keywords internal
 .extract_assignment <- function(solved, start_time, parameters, cand, ids, team_ids, load, dmat,
                                 pr, pd, sq_u, sq_d, w_q, w_v, w_cost, lam_v, s_v, z_v, w_sol,
-                                model_d, given_idx, fixed, fixed_load, lower, upper, warnings) {
+                                model_d, given_idx, omat, fixed, fixed_load, lower, upper, warnings) {
   nu <- length(ids)
   nd <- length(team_ids)
+  is_given <- lengths(given_idx) > 0L
+  # rows of each team's origins in its cost matrix: omat if given, dmat if model
   origin_idx <- given_idx
+  origin_mat <- rep(list(omat), nd)
   for (m in seq_along(model_d)) {
     origin_idx[[model_d[m]]] <- which.max(z_v[(m - 1L) * nu + seq_len(nu)])
+    origin_mat[[model_d[m]]] <- dmat
   }
   origins <- tibble::tibble(
     team_id = rep(team_ids, lengths(origin_idx)),
-    origin_tract_id = ids[unlist(origin_idx)],
-    source = rep(ifelse(lengths(given_idx) > 0L, "given", "model"), lengths(origin_idx))
+    origin_tract_id = unlist(lapply(seq_len(nd), \(d) rownames(origin_mat[[d]])[origin_idx[[d]]])),
+    source = rep(ifelse(is_given, "given", "model"), lengths(origin_idx))
   )
 
   chosen <- which(lam_v > 0.5)
@@ -628,7 +638,7 @@ surveyzones_assign_teams <- function(units,
     workload = vapply(cand$tract_ids[pr[chosen]], \(x) sum(load[x]), numeric(1)),
     span_m = cand$span_m[pr[chosen]],
     cost = vapply(chosen, \(p) {
-      v <- dmat[origin_idx[[pd[p]]], match(cand$center_tract_id[pr[p]], ids)]
+      v <- origin_mat[[pd[p]]][origin_idx[[pd[p]]], match(cand$center_tract_id[pr[p]], ids)]
       min(v, na.rm = TRUE)
     }, numeric(1))
   )
