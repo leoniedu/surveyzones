@@ -407,88 +407,131 @@ surveyzones_assign_teams <- function(units,
   nf <- length(free_idx)
   if (length(setdiff(free_idx, covered)) > 0L) hard_infeasible <- TRUE
 
-  # variable layout: lam | s | z | a | w | y  (| lo | hi | ek | ec when elastic)
-  o_lam <- 0L
-  o_s <- np
-  o_z <- o_s + nsq
-  o_a <- o_z + nu * nmd
-  o_w <- o_a + naq
-  o_y <- o_w + nwq
-  nvar <- o_y + ny
-  o_lo <- nvar
-  o_hi <- o_lo + nd
-  o_ek <- o_hi + nd
-  o_ec <- o_ek + nd
-  nvar_e <- o_ec + nf
-  cost <- c(pair_cost, rep(0, o_a - np), a_cost, w_cost, rep(0, ny))
-  types <- c(rep("B", o_a), rep("C", naq + nwq + ny))
+  # ---- Variables ---------------------------------------------------------------
+  # One column vector, in named blocks (`col("s", q)` is the column of s[q]):
+  #   lam[p]  binary  roteiro pr[p] goes to team pd[p]
+  #   s[q]    binary  tract sq_u[q] is loose for team sq_d[q]
+  #   z[c,m]  binary  the model-chosen origin of team model_d[m] is tract c
+  #   a[i]    cont.   pair a_p[i] is reached from origin a_c[i] (a = lam * z)
+  #   w[i]    cont.   loose q = w_q[i] hangs off anchor tract w_v[i]
+  #   y[i]    cont.   team y_key[i, 2] has a roteiro covering tract y_key[i, 1]
+  # The elastic model appends one slack per relaxable rule:
+  #   lo[d], hi[d]  load band;  ek[d]  k;  ec[t]  coverage of free tract t
+  sizes <- c(
+    lam = np, s = nsq, z = nu * nmd, a = naq, w = nwq, y = ny,
+    lo = nd, hi = nd, ek = nd, ec = nf
+  )
+  offset <- stats::setNames(c(0L, cumsum(sizes))[seq_along(sizes)], names(sizes))
+  col <- function(block, idx = seq_len(sizes[[block]])) offset[[block]] + idx
+  z_col <- function(c, m) col("z", (m - 1L) * nu + c)
+  nvar <- offset[["lo"]]
+  nvar_e <- sum(sizes)
 
-  build_rows <- function(elastic) {
-    rows <- .new_row_builder()
-    seq_a <- seq_len(naq)
-    # a <= z (origin) and a <= lam (valid inequality)
-    rows$add(rep(seq_a, 2), c(o_a + seq_a, o_z + (match(pd[a_p], model_d) - 1L) * nu + a_c), rep(c(1, -1), each = naq), naq, "<=", 0)
-    rows$add(rep(seq_a, 2), c(o_a + seq_a, o_lam + a_p), rep(c(1, -1), each = naq), naq, "<=", 0)
-    # sum_c a[r,c,d] = lam[r,d]
+  # min  sum_p cost(origin -> roteiro) lam[p]   (teams with given origins)
+  #    + sum_i dur(a_c[i] -> centre) a[i]       (teams with model origins)
+  #    + sum_i dur(anchor -> loose tract) w[i]
+  cost <- numeric(nvar)
+  cost[col("lam")] <- pair_cost
+  cost[col("a")] <- a_cost
+  cost[col("w")] <- w_cost
+  types <- c(rep("B", offset[["a"]]), rep("C", naq + nwq + ny))
+
+  # ---- Constraints -------------------------------------------------------------
+  # x[i] <= y[i] for each pair of columns
+  add_le <- function(rows, x, y) {
+    n <- length(x)
+    rows$add(rep(seq_len(n), 2), c(x, y), rep(c(1, -1), each = n), n, "<=", 0)
+  }
+
+  # a[i] <= z[origin, team] and a[i] <= lam[pair]; sum_c a[p, c] = lam[p]:
+  # a model-origin team reaches each of its roteiros from its one origin
+  add_origin_link <- function(rows) {
+    add_le(rows, col("a"), z_col(a_c, match(pd[a_p], model_d)))
+    add_le(rows, col("a"), col("lam", a_p))
     rows$add(
-      c(match(a_p, mp), seq_along(mp)), c(o_a + seq_a, o_lam + mp),
+      c(match(a_p, mp), seq_along(mp)), c(col("a"), col("lam", mp)),
       c(rep(1, naq), rep(-1, length(mp))), length(mp), "==", 0
     )
-    # one origin per team; at most k roteiros per team
-    rows$add(
-      rep(seq_len(nmd), each = nu), o_z + seq_len(nu * nmd), rep(1, nu * nmd), nmd, "==", 1
-    )
+  }
+
+  # sum_c z[c, m] = 1: one origin per model-origin team
+  add_one_origin <- function(rows) {
+    rows$add(rep(seq_len(nmd), each = nu), col("z"), rep(1, nu * nmd), nmd, "==", 1)
+  }
+
+  # sum_{p of d} lam[p] <= k (+ ek[d])
+  add_max_roteiros <- function(rows, elastic) {
     if (elastic) {
       rows$add(
-        c(pd, seq_len(nd)), c(o_lam + seq_len(np), o_ek + seq_len(nd)),
+        c(pd, seq_len(nd)), c(col("lam"), col("ek")),
         c(rep(1, np), rep(-1, nd)), nd, "<=", k
       )
     } else {
-      rows$add(pd, o_lam + seq_len(np), rep(1, np), nd, "<=", k)
+      rows$add(pd, col("lam"), rep(1, np), nd, "<=", k)
     }
-    # load band
+  }
+
+  # lower <= fixed load + roteiro load + loose load <= upper, per team
+  # (elastic: + lo[d] on the lower side, - hi[d] on the upper side)
+  add_load_band <- function(rows, elastic) {
     for (d in seq_len(nd)) {
-      cols <- c(o_lam + ps_by_d[[d]], o_s + sq_by_d[[d]])
+      cols <- c(col("lam", ps_by_d[[d]]), col("s", sq_by_d[[d]]))
       vals <- c(pW[ps_by_d[[d]]], s_load[sq_by_d[[d]]])
+      lo <- lower - fixed_load[d]
+      hi <- upper - fixed_load[d]
       if (elastic) {
-        rows$add(rep(1L, length(cols) + 1L), c(cols, o_lo + d), c(vals, 1), 1L, ">=", lower - fixed_load[d])
-        rows$add(rep(1L, length(cols) + 1L), c(cols, o_hi + d), c(vals, -1), 1L, "<=", upper - fixed_load[d])
+        rows$add(rep(1L, length(cols) + 1L), c(cols, col("lo", d)), c(vals, 1), 1L, ">=", lo)
+        rows$add(rep(1L, length(cols) + 1L), c(cols, col("hi", d)), c(vals, -1), 1L, "<=", hi)
       } else if (length(cols) > 0L) {
-        rows$add(rep(1L, length(cols)), cols, vals, 1L, ">=", lower - fixed_load[d])
-        rows$add(rep(1L, length(cols)), cols, vals, 1L, "<=", upper - fixed_load[d])
+        rows$add(rep(1L, length(cols)), cols, vals, 1L, ">=", lo)
+        rows$add(rep(1L, length(cols)), cols, vals, 1L, "<=", hi)
       }
     }
-    # coverage of free tracts
+  }
+
+  # sum_{p covering t} lam[p] + sum_{q of t} s[q] (+ ec[t]) = 1, per free
+  # tract: each in exactly one roteiro or loose with one team. Mandatory
+  # tracts have no s, so they must be in a roteiro.
+  add_coverage <- function(rows, elastic) {
     mi <- match(mem_t, free_idx)
     si <- match(sq_u, free_idx)
     if (elastic) {
       rows$add(
-        c(mi, si, seq_len(nf)), c(o_lam + mem_p, o_s + seq_len(nsq), o_ec + seq_len(nf)),
+        c(mi, si, seq_len(nf)), c(col("lam", mem_p), col("s"), col("ec")),
         rep(1, length(mi) + nsq + nf), nf, "==", 1
       )
     } else {
-      rows$add(
-        c(mi, si), c(o_lam + mem_p, o_s + seq_len(nsq)), rep(1, length(mi) + nsq), nf, "==", 1
-      )
+      rows$add(c(mi, si), c(col("lam", mem_p), col("s")), rep(1, length(mi) + nsq), nf, "==", 1)
     }
-    # loose tracts hang off one anchor
-    seq_w <- seq_len(nwq)
-    rows$add(rep(seq_w, 2), c(o_w + seq_w, o_s + w_q), rep(c(1, -1), each = nwq), nwq, "<=", 0)
+  }
+
+  # A loose tract hangs off one anchor of its team: w <= s; w <= y when the
+  # anchor is not fixed (y[v, d] = sum of d's roteiros covering v); and
+  # sum_{anchors} w[q, .] = s[q]
+  add_loose_anchor <- function(rows) {
+    add_le(rows, col("w"), col("s", w_q))
     nonfix <- which(!w_fixed)
-    rows$add(
-      rep(seq_along(nonfix), 2), c(o_w + nonfix, o_y + w_y), rep(c(1, -1), each = length(nonfix)),
-      length(nonfix), "<=", 0
-    )
+    add_le(rows, col("w", nonfix), col("y", w_y))
     gi <- match(paste(mem_t, pd[mem_p]), paste(y_key[, 1], y_key[, 2]))
     hit <- which(!is.na(gi))
     rows$add(
-      c(seq_len(ny), gi[hit]), c(o_y + seq_len(ny), o_lam + mem_p[hit]),
+      c(seq_len(ny), gi[hit]), c(col("y"), col("lam", mem_p[hit])),
       c(rep(1, ny), rep(-1, length(hit))), ny, "==", 0
     )
     rows$add(
-      c(w_q, seq_len(nsq)), c(o_w + seq_w, o_s + seq_len(nsq)),
+      c(w_q, seq_len(nsq)), c(col("w"), col("s")),
       c(rep(1, nwq), rep(-1, nsq)), nsq, "==", 0
     )
+  }
+
+  build_rows <- function(elastic) {
+    rows <- .new_row_builder()
+    add_origin_link(rows)
+    add_one_origin(rows)
+    add_max_roteiros(rows, elastic)
+    add_load_band(rows, elastic)
+    add_coverage(rows, elastic)
+    add_loose_anchor(rows)
     rows
   }
 
@@ -510,15 +553,15 @@ surveyzones_assign_teams <- function(units,
     }
     return(finish(.elastic_fallback(
       build_rows = build_rows, nvar_e = nvar_e, types = types, cost = cost,
-      slack_cols = o_lo + seq_len(nvar_e - o_lo), o_lo = o_lo, nd = nd, nf = nf,
+      slack_cols = nvar + seq_len(nvar_e - nvar), o_lo = nvar, nd = nd, nf = nf,
       team_ids = team_ids, free_ids = free_ids, solver = solver, max_time = max_time,
       rel_tol = rel_tol, verbose = verbose, finish_empty = finish_empty,
       extract = \(solved, sol) .extract_assignment(
         solved = solved, start_time = start_time, parameters = parameters,
         cand = cand, ids = ids, team_ids = team_ids, load = load, dmat = dmat,
         pr = pr, pd = pd, sq_u = sq_u, sq_d = sq_d, w_q = w_q, w_v = w_v, w_cost = w_cost,
-        lam_v = sol[o_lam + seq_len(np)], s_v = sol[o_s + seq_len(nsq)],
-        z_v = sol[o_z + seq_len(nu * nmd)], w_sol = sol[o_w + seq_len(nwq)],
+        lam_v = sol[col("lam")], s_v = sol[col("s")],
+        z_v = sol[col("z")], w_sol = sol[col("w")],
         model_d = model_d, given_idx = given_idx, omat = omat,
         fixed = fixed, fixed_load = fixed_load, lower = lower, upper = upper,
         warnings = cand_warnings
@@ -526,10 +569,10 @@ surveyzones_assign_teams <- function(units,
     )))
   }
   sol <- solved$solution
-  lam_v <- sol[o_lam + seq_len(np)]
-  s_v <- sol[o_s + seq_len(nsq)]
-  z_v <- sol[o_z + seq_len(nu * nmd)]
-  w_v_sol <- sol[o_w + seq_len(nwq)]
+  lam_v <- sol[col("lam")]
+  s_v <- sol[col("s")]
+  z_v <- sol[col("z")]
+  w_v_sol <- sol[col("w")]
   out <- .extract_assignment(
     solved = solved, start_time = start_time, parameters = parameters,
     cand = cand, ids = ids, team_ids = team_ids, load = load, dmat = dmat,
