@@ -41,7 +41,7 @@
 #' @param k Maximum number of roteiros per team: a whole number >= 1, or
 #'   `"auto"`. With `"auto"`, `k_min = ceiling(min_roteiros / n_teams)` is
 #'   computed from the minimum number of roteiros that partition the mandatory
-#'   tracts (`diagnostics$min_roteiros`) and `k = k_min + 2`. `k_min` is only a
+#'   tracts (`diagnostics$min_roteiros`) and `k = k_min + 1`. `k_min` is only a
 #'   lower bound: team eligibility can require more roteiros per team, in which
 #'   case the model is infeasible and the elastic diagnosis reports the `k`
 #'   rule. When the minimum-roteiros cover stops at the time limit, its count is
@@ -303,7 +303,7 @@ surveyzones_assign_teams <- function(units,
       ))
     }
     k_min <- as.integer(ceiling(min_roteiros / nd))
-    k <- k_min + 2L
+    k <- k_min + 1L
   }
   k <- as.integer(k)
 

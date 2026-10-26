@@ -59,7 +59,7 @@ model-chosen origin. The cost of loose tracts is unchanged.}
 \item{k}{Maximum number of roteiros per team: a whole number >= 1, or
 \code{"auto"}. With \code{"auto"}, \code{k_min = ceiling(min_roteiros / n_teams)} is
 computed from the minimum number of roteiros that partition the mandatory
-tracts (\code{diagnostics$min_roteiros}) and \code{k = k_min + 2}. \code{k_min} is only a
+tracts (\code{diagnostics$min_roteiros}) and \code{k = k_min + 1}. \code{k_min} is only a
 lower bound: team eligibility can require more roteiros per team, in which
 case the model is infeasible and the elastic diagnosis reports the \code{k}
 rule. When the minimum-roteiros cover stops at the time limit, its count is
