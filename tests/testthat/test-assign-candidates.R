@@ -104,3 +104,63 @@ test_that("bad points abort", {
     "max_tracts"
   )
 })
+
+walk_line <- function() {
+  # walking metres between households of pts_line(); b1 is cut off from A by
+  # a barrier, so A is 2 km away on foot although ~300 m in a straight line
+  pairs <- tibble::tribble(
+    ~a,   ~b,   ~distance,
+    "a1", "b1", 2000,
+    "a2", "b1", 2900,
+    "b1", "c1", 350,
+    "b1", "c2", 2000,
+    "a1", "c1", 2300,
+    "c1", "d1", 1700,
+    "c2", "d1", 0
+  )
+  dplyr::bind_rows(
+    dplyr::transmute(pairs, origin_id = a, destination_id = b, distance),
+    dplyr::transmute(pairs, origin_id = b, destination_id = a, distance)
+  )
+}
+
+test_that("walk_distances replace the straight line", {
+  cand <- surveyzones_roteiro_candidates(
+    pts_line(), elig_all, c("A", "B", "C", "D"), radius_m = 500, walk_distances = walk_line()
+  )
+  sets <- purrr::map_chr(cand$tract_ids, \(x) paste(x, collapse = "+"))
+  expect_false("A+B+C" %in% sets)
+  expect_false("A+B" %in% sets)
+  bc <- cand[sets == "B+C", ]
+  expect_equal(bc$center_point_id, "b1")
+  expect_equal(bc$span_m, 350)
+  expect_true("C+D" %in% sets)
+})
+
+test_that("missing walk pairs count as beyond the radius", {
+  w <- dplyr::filter(walk_line(), !(origin_id == "b1" & destination_id == "c1"))
+  cand <- surveyzones_roteiro_candidates(
+    pts_line(), elig_all, c("A", "B", "C", "D"), walk_distances = w
+  )
+  sets <- purrr::map_chr(cand$tract_ids, \(x) paste(x, collapse = "+"))
+  expect_false(any(cand$center_point_id == "b1" & sets == "B+C"))
+})
+
+test_that("invalid walk_distances abort", {
+  w <- walk_line()
+  expect_error(
+    surveyzones_roteiro_candidates(pts_line(), elig_all, c("A", "B", "C", "D"), walk_distances = dplyr::select(w, -distance)),
+    "walk_distances"
+  )
+  w$distance[1] <- -1
+  expect_error(
+    surveyzones_roteiro_candidates(pts_line(), elig_all, c("A", "B", "C", "D"), walk_distances = w),
+    "walk_distances"
+  )
+  w <- walk_line()
+  w$origin_id[1] <- "zz"
+  expect_error(
+    surveyzones_roteiro_candidates(pts_line(), elig_all, c("A", "B", "C", "D"), walk_distances = w),
+    "zz"
+  )
+})

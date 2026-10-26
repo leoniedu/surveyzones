@@ -3,7 +3,8 @@
 #' Builds candidate roteiros (sets of tracts walkable from a centre household)
 #' for a team-assignment model. From each household taken as centre, a tract
 #' is "near" when at least one of its households lies within `radius_m`
-#' (straight line); the whole tract then joins. Every subset of near tracts
+#' (straight line, or walking distance when `walk_distances` is given); the
+#' whole tract then joins. Every subset of near tracts
 #' containing the centre's tract (up to `max_tracts` tracts) whose members
 #' share at least one eligible team becomes a candidate. Every tract also gets
 #' a singleton candidate. Candidates are deduplicated on the sorted tract set,
@@ -15,14 +16,20 @@
 #' @param eligible A data frame with columns `tract_id` and `team_id`.
 #' @param tract_ids Character vector of all tract ids, including tracts that
 #'   have no points.
-#' @param radius_m Positive number. Maximum straight-line distance in metres
-#'   from the centre household to the nearest household of a member tract.
+#' @param radius_m Positive number. Maximum distance in metres from the
+#'   centre household to the nearest household of a member tract.
+#' @param walk_distances `NULL` (straight-line distances) or a long data frame
+#'   with `origin_id`, `destination_id` (both `point_id`s) and `distance`
+#'   (walking metres, e.g. from an OSRM foot profile), read from the centre
+#'   household as origin. Missing pairs count as beyond `radius_m`, so it is
+#'   enough to supply the pairs within `radius_m` in a straight line.
 #' @param max_tracts Positive integer. Maximum number of tracts per roteiro.
 #'
 #' @return A tibble ordered by `roteiro_id` with columns `roteiro_id`,
 #'   `center_point_id` (`NA` for tracts without coordinates), `center_tract_id`,
 #'   `tract_ids` (list of sorted character vectors), `teams` (list of teams
-#'   eligible for all member tracts) and `span_m` (largest distance from the
+#'   eligible for all member tracts) and `span_m` (largest distance, straight
+#'   or walking as above, from the
 #'   centre to the nearest household of each member tract; 0 for singletons).
 #'   The `"warnings"` attribute is a character vector.
 #' @export
@@ -30,7 +37,8 @@ surveyzones_roteiro_candidates <- function(points,
                                            eligible,
                                            tract_ids,
                                            radius_m = 500,
-                                           max_tracts = 5L) {
+                                           max_tracts = 5L,
+                                           walk_distances = NULL) {
   if (!inherits(points, "sf") || !all(c("tract_id", "point_id") %in% names(points))) {
     cli::cli_abort(
       "{.arg points} must be an sf object with {.field tract_id} and {.field point_id} columns."
@@ -67,6 +75,28 @@ surveyzones_roteiro_candidates <- function(points,
     )
   }
   max_tracts <- as.integer(max_tracts)
+  walk_by_origin <- NULL
+  if (!is.null(walk_distances)) {
+    if (!is.data.frame(walk_distances) ||
+      !all(c("origin_id", "destination_id", "distance") %in% names(walk_distances))) {
+      cli::cli_abort(
+        "{.arg walk_distances} must be {.code NULL} or a data frame with {.field origin_id}, {.field destination_id} and {.field distance}."
+      )
+    }
+    w_dist <- walk_distances$distance
+    if (!is.numeric(w_dist) || anyNA(w_dist) || any(w_dist < 0)) {
+      cli::cli_abort("{.field distance} in {.arg walk_distances} must be non-negative and not {.val NA}.")
+    }
+    w_from <- as.character(walk_distances$origin_id)
+    w_to <- as.character(walk_distances$destination_id)
+    unknown <- setdiff(c(w_from, w_to), pt_id)
+    if (length(unknown) > 0L) {
+      cli::cli_abort("{.arg walk_distances} has points not in {.arg points}: {.val {unknown}}.")
+    }
+    walk_by_origin <- split(
+      data.frame(to = match(w_to, pt_id), d = as.numeric(w_dist)), w_from
+    )
+  }
 
   teams_of <- split(as.character(eligible$team_id), as.character(eligible$tract_id))
   teams_of <- lapply(teams_of, \(x) sort(unique(x)))
@@ -107,7 +137,14 @@ surveyzones_roteiro_candidates <- function(points,
   geom <- sf::st_geometry(points)
   for (i in order(pt_id)) {
     own <- pt_tract[i]
-    d <- as.numeric(sf::st_distance(geom[i], geom))
+    if (is.null(walk_by_origin)) {
+      d <- as.numeric(sf::st_distance(geom[i], geom))
+    } else {
+      d <- rep(Inf, length(pt_id))
+      w <- walk_by_origin[[pt_id[i]]]
+      if (!is.null(w)) d[w$to] <- w$d
+      d[i] <- 0
+    }
     tract_min <- vapply(pts_by_tract, \(idx) min(d[idx]), numeric(1))
     near <- sort(setdiff(names(tract_min)[tract_min <= radius_m], own))
     near <- near[lengths(lapply(near, \(t) intersect(tract_teams(own), tract_teams(t)))) > 0L]

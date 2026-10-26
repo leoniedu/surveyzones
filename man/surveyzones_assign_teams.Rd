@@ -17,6 +17,7 @@ surveyzones_assign_teams(
   radius_m = 500,
   tol = 0.15,
   max_tracts = 5L,
+  walk_distances = NULL,
   solver = "glpk",
   max_time = 300,
   rel_tol = 0.01,
@@ -65,7 +66,8 @@ rule. When the minimum-roteiros cover stops at the time limit, its count is
 an upper bound, so \code{k_min} may be over-estimated. The \code{k} used, \code{k_auto}
 and \code{k_min} are stored in \code{parameters}.}
 
-\item{radius_m, max_tracts}{See \code{\link[=surveyzones_roteiro_candidates]{surveyzones_roteiro_candidates()}}.}
+\item{radius_m, max_tracts, walk_distances}{See
+\code{\link[=surveyzones_roteiro_candidates]{surveyzones_roteiro_candidates()}}.}
 
 \item{tol}{Non-negative load tolerance around the mean.}
 

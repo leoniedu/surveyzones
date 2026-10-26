@@ -9,7 +9,8 @@ surveyzones_roteiro_candidates(
   eligible,
   tract_ids,
   radius_m = 500,
-  max_tracts = 5L
+  max_tracts = 5L,
+  walk_distances = NULL
 )
 }
 \arguments{
@@ -22,16 +23,23 @@ simply absent.}
 \item{tract_ids}{Character vector of all tract ids, including tracts that
 have no points.}
 
-\item{radius_m}{Positive number. Maximum straight-line distance in metres
-from the centre household to the nearest household of a member tract.}
+\item{radius_m}{Positive number. Maximum distance in metres from the
+centre household to the nearest household of a member tract.}
 
 \item{max_tracts}{Positive integer. Maximum number of tracts per roteiro.}
+
+\item{walk_distances}{\code{NULL} (straight-line distances) or a long data frame
+with \code{origin_id}, \code{destination_id} (both \code{point_id}s) and \code{distance}
+(walking metres, e.g. from an OSRM foot profile), read from the centre
+household as origin. Missing pairs count as beyond \code{radius_m}, so it is
+enough to supply the pairs within \code{radius_m} in a straight line.}
 }
 \value{
 A tibble ordered by \code{roteiro_id} with columns \code{roteiro_id},
 \code{center_point_id} (\code{NA} for tracts without coordinates), \code{center_tract_id},
 \code{tract_ids} (list of sorted character vectors), \code{teams} (list of teams
-eligible for all member tracts) and \code{span_m} (largest distance from the
+eligible for all member tracts) and \code{span_m} (largest distance, straight
+or walking as above, from the
 centre to the nearest household of each member tract; 0 for singletons).
 The \code{"warnings"} attribute is a character vector.
 }
@@ -39,7 +47,8 @@ The \code{"warnings"} attribute is a character vector.
 Builds candidate roteiros (sets of tracts walkable from a centre household)
 for a team-assignment model. From each household taken as centre, a tract
 is "near" when at least one of its households lies within \code{radius_m}
-(straight line); the whole tract then joins. Every subset of near tracts
+(straight line, or walking distance when \code{walk_distances} is given); the
+whole tract then joins. Every subset of near tracts
 containing the centre's tract (up to \code{max_tracts} tracts) whose members
 share at least one eligible team becomes a candidate. Every tract also gets
 a singleton candidate. Candidates are deduplicated on the sorted tract set,

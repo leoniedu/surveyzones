@@ -1,6 +1,6 @@
 Package: surveyzones
 Title: Workload-Balanced Zone Construction for Survey Field Operations
-Version: 0.0.0.9005
+Version: 0.0.0.9006
 Authors@R:
     person("Eduardo", "Leoni", , "eduardo.leoni@ibge.gov.br", role = c("aut", "cre"))
 Description: Constructs compact, workload-balanced geographic zones for
@@ -14,7 +14,6 @@ License: MIT + file LICENSE
 Depends: R (>= 4.1.0)
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.3.3
 Imports:
     cachem,
     cli,
@@ -57,3 +56,4 @@ Suggests:
     testthat (>= 3.0.0),
     withr
 Config/testthat/edition: 3
+Config/roxygen2/version: 8.0.0

@@ -47,7 +47,8 @@
 #'   rule. When the minimum-roteiros cover stops at the time limit, its count is
 #'   an upper bound, so `k_min` may be over-estimated. The `k` used, `k_auto`
 #'   and `k_min` are stored in `parameters`.
-#' @param radius_m,max_tracts See [surveyzones_roteiro_candidates()].
+#' @param radius_m,max_tracts,walk_distances See
+#'   [surveyzones_roteiro_candidates()].
 #' @param tol Non-negative load tolerance around the mean.
 #' @param solver,max_time,rel_tol,verbose Solver settings.
 #' @param use_cache Logical. If `TRUE` (default), the whole solve is memoised
@@ -80,6 +81,7 @@ surveyzones_assign_teams <- function(units,
                                      radius_m = 500,
                                      tol = 0.15,
                                      max_tracts = 5L,
+                                     walk_distances = NULL,
                                      solver = "glpk",
                                      max_time = 300,
                                      rel_tol = 0.01,
@@ -102,6 +104,12 @@ surveyzones_assign_teams <- function(units,
   if (!is.numeric(tol) || length(tol) != 1L || is.na(tol) || tol < 0) {
     cli::cli_abort("{.arg tol} must be a single number >= 0.")
   }
+  if (!is.null(walk_distances) && (!is.data.frame(walk_distances) ||
+    !all(c("origin_id", "destination_id", "distance") %in% names(walk_distances)))) {
+    cli::cli_abort(
+      "{.arg walk_distances} must be {.code NULL} or a data frame with {.field origin_id}, {.field destination_id} and {.field distance}."
+    )
+  }
   points_df <- tibble::tibble(
     tract_id = as.character(points$tract_id),
     point_id = as.character(points$point_id),
@@ -113,8 +121,8 @@ surveyzones_assign_teams <- function(units,
     units = units, points_df = points_df, crs = crs, teams = teams,
     eligible = eligible, durations = durations, mandatory = mandatory,
     fixed = fixed, origins = origins, k = k, radius_m = radius_m, tol = tol,
-    max_tracts = max_tracts, solver = solver, max_time = max_time,
-    rel_tol = rel_tol, verbose = verbose
+    max_tracts = max_tracts, walk_distances = walk_distances, solver = solver,
+    max_time = max_time, rel_tol = rel_tol, verbose = verbose
   )
   if (use_cache) {
     is_cached <- do.call(memoise::has_cache(.assign_teams_core_mem), core_args)
@@ -142,6 +150,7 @@ surveyzones_assign_teams <- function(units,
                                radius_m,
                                tol,
                                max_tracts,
+                               walk_distances,
                                solver,
                                max_time,
                                rel_tol,
@@ -258,10 +267,20 @@ surveyzones_assign_teams <- function(units,
 
   # candidates over non-fixed tracts only
   elig_free <- elig[elig$tract_id %in% free_ids, ]
+  walk_free <- NULL
+  if (!is.null(walk_distances)) {
+    free_pts <- as.character(points$point_id)[as.character(points$tract_id) %in% free_ids]
+    walk_free <- walk_distances[
+      as.character(walk_distances$origin_id) %in% free_pts &
+        as.character(walk_distances$destination_id) %in% free_pts, ,
+      drop = FALSE
+    ]
+  }
   if (length(free_ids) > 0L) {
     cand <- surveyzones_roteiro_candidates(
       points[as.character(points$tract_id) %in% free_ids, ],
-      elig_free, free_ids, radius_m = radius_m, max_tracts = max_tracts
+      elig_free, free_ids, radius_m = radius_m, max_tracts = max_tracts,
+      walk_distances = walk_free
     )
     cand_warnings <- attr(cand, "warnings")
   } else {

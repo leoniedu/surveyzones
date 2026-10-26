@@ -387,3 +387,21 @@ test_that("use_cache: changing origins misses", {
   expect_message(run(tibble::tibble(team_id = "t1", tract_id = "B")), "Computing and caching")
   expect_message(run(NULL), "Computing and caching")
 })
+
+test_that("walk_distances reach the roteiro candidates", {
+  skip_if_not_installed("ROI.plugin.highs")
+  x <- toy_instance()
+  # every pair 5 km apart on foot: no roteiro has more than one tract
+  pts <- x$points$point_id
+  far <- tidyr::expand_grid(origin_id = pts, destination_id = pts) |>
+    dplyr::filter(origin_id != destination_id) |>
+    dplyr::mutate(distance = 5000)
+  res <- surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations,
+                                  mandatory = x$units$tract_id, k = 3L, tol = 0.5,
+                                  walk_distances = far, solver = "highs", use_cache = FALSE)
+  expect_true(all(res$roteiros$n_tracts == 1L))
+  res_line <- surveyzones_assign_teams(x$units, x$points, x$teams, x$eligible, x$durations,
+                                       mandatory = x$units$tract_id, k = 3L, tol = 0.5,
+                                       solver = "highs", use_cache = FALSE)
+  expect_true(any(res_line$roteiros$n_tracts > 1L))
+})
